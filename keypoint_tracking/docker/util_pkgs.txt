@@ -1,0 +1,38 @@
+# Geospatial 
+rasterio==1.3.11
+geopandas==1.0.1
+fiona==1.10.0
+
+# Development & Utilities
+ruff==0.12.8  # Python linter/formatter
+yapf==0.40.2  # Code formatter
+
+pillow==10.2.0
+einops==0.8.0
+
+# Data, I/O and serialization
+PyYAML==6.0.2
+h5py==3.13.0
+addict==2.4.0
+pyyaml==6.0.2
+yapf==0.40.2
+shapely==2.0.6
+six==1.16.0
+terminaltables==3.1.5
+termcolor==1.1.0
+rich==13.8.1
+
+# Video / audio processing
+imageio==2.35.1
+imageio-ffmpeg==0.5.1
+moviepy
+mediapy==1.2.2
+ffmpeg-python==0.2.0
+
+
+# ML utilities, metrics & evaluation
+pycocotools==2.0.8
+
+# Misc / developer utilities
+tqdm==4.66.5
+requests==2.32.3

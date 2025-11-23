@@ -18,6 +18,8 @@ Features:
 
 import sys
 import cv2
+import time
+import threading
 import numpy as np
 from gui_framework import GUIFramework
 from gui_utils import GUIComponents, ImageProcessor
@@ -32,7 +34,7 @@ class VideoFlowPlayer:
         # Video state
         self.cap = None
         self.total_frames = 0
-        self.fps = 25.0
+        self.fps = 60.0#25.0
         self.frame_idx = 0
         self.playing = False
         self.speed = 1.0
@@ -40,10 +42,77 @@ class VideoFlowPlayer:
         self.flow_mode = "dense"
         
         # UI state
-        self.timer_active = False
-        
         self.setup_ui()
+        self.frame_thread = threading.Thread(target=self._update_frame, daemon=True)
+        # Performance tracking
+        self.perf_info = {
+            'update_frame': {
+            'fps': 0.0,
+            'ms': 0.0,
+            'itr': 0.0,
+            'time': time.time()
+            },
+            'gui_update': {
+            'fps': 0.0,
+            'itr': 0.0,
+            'ms': 0.0,
+            'time': time.time()
+            }
+        }
+        
+        # Performance display labels (will be created in setup_ui)
+        self.perf_frame = None
+        self.open_file(path='../../tokyo.mov')
     
+    def calculate_performance(self,  key):
+        """Calculate and update performance metrics using incremental frame counting"""
+        current_time = time.time()
+        
+        if key not in self.perf_info:
+            self.perf_info[key] = {
+                'fps': 0.0,
+                'ms': 0.0,
+                'itr': 0.0,
+                'time': current_time,
+                'fps_time': current_time
+            }
+        
+        self.perf_info[key]['ms']   = (current_time - self.perf_info[key]['time']) * 1000.0  # ms
+        self.perf_info[key]['time'] = current_time
+        
+        self.perf_info[key]['itr'] += 1
+        time_elapsed = current_time - self.perf_info[key]['fps_time']
+        if time_elapsed >= 1.0:
+            self.perf_info[key]['fps']  = self.perf_info[key]['itr'] / time_elapsed    
+            self.perf_info[key]['itr'] = 0
+            self.perf_info[key]['fps_time'] = current_time
+        
+        # Update performance labels
+        self.gui.update_text(
+            key, 
+            f"Frame Update: {self.perf_info[key]['ms']:.1f}ms ({self.perf_info[key]['fps']:.1f} FPS)"
+        )
+
+    def _create_performance_display(self, parent):
+        """Create performance monitoring labels"""        
+        # Performance labels
+        self.gui.create_label(
+            parent, "perf_title", "Performance Monitoring:", 
+            10, 5
+        )
+        
+        self.gui.create_label(
+            parent, "frame", 
+            "Frame Update: 0.0ms (0.0 FPS)", 
+            200, 5
+        )
+        
+        self.gui.create_label(
+            parent, "gui", 
+            "GUI Update: 0.0ms (0.0 FPS)", 
+            400, 5
+        )
+
     def setup_ui(self):
         """Setup the user interface"""
         window_width = 1350
@@ -66,13 +135,17 @@ class VideoFlowPlayer:
         mode_frame = self.gui.create_frame(
             self.window, "mode_frame", 0, 60, window_width, 40
         )
+
+        info_frame = self.gui.create_frame(
+            self.window, "info_frame", 0, 110, window_width, 40
+        )
         
         # Create flow mode controls
         self._create_flow_mode_controls(mode_frame)
         
         # Video display frame
         display_frame = self.gui.create_frame(
-            self.window, "display_frame", 0, 110, window_width, DISPLAY_H + 20
+            self.window, "display_frame", 0, 150, window_width, DISPLAY_H + 20
         )
         
         # Create video displays
@@ -83,7 +156,7 @@ class VideoFlowPlayer:
             self.window, "status_label", 
             "No video loaded", 10, window_height - 40
         )
-        
+        self._create_performance_display(info_frame)
         # Set initial radio button state
         self._set_initial_flow_mode()
     
@@ -160,15 +233,16 @@ class VideoFlowPlayer:
         if self.cap and self.prev_gray is not None:
             self.show_frame(self.frame_idx)
     
-    def open_file(self):
-        """Open video file dialog"""
-        filetypes = [
-            ("Video files", "*.mp4 *.avi *.mov *.mkv"), 
-            ("All files", "*.*")
-        ]
-        path = self.gui.show_file_dialog(filetypes)
+    def open_file(self, path=None):
+        if path is None:
+            """Open video file dialog"""
+            filetypes = [
+                ("Video files", "*.mp4 *.avi *.mov *.mkv"), 
+                ("All files", "*.*")
+            ]
+            path = self.gui.show_file_dialog(filetypes)
         
-        if not path:
+        if path is None:
             return
         
         self.release_video()
@@ -202,6 +276,8 @@ class VideoFlowPlayer:
             return
         
         self.playing = not self.playing
+        if self.playing and not self.frame_thread.is_alive():
+                self.frame_thread.start()
         
         # Update button text - find the play button
         play_btn = self.gui.get_component("control_buttons_btn_1")  # Play is the second button (index 1)
@@ -210,45 +286,25 @@ class VideoFlowPlayer:
         else:  # PyQt5
             play_btn.setText("Pause" if self.playing else "Play")
         
-        if self.playing:
-            self._schedule_next_frame()
-        else:
-            self.gui.stop_timer()
-            self.timer_active = False
-        
         print(f"Playback {'started' if self.playing else 'paused'}")
     
-    def _schedule_next_frame(self):
-        """Schedule next frame update"""
-        if not self.timer_active and self.playing:
-            delay = max(1, int(1000 / (self.fps * max(0.25, self.speed))))
-            self.gui.start_timer(self._update_frame, delay)
-            self.timer_active = True
-    
     def _update_frame(self):
-        """Update to next frame during playback"""
-        if not self.cap or not self.playing:
-            self.timer_active = False
-            return
-        
-        # Calculate frame step based on speed
-        step = int(self.speed) if self.speed >= 1.0 else 1
-        self.frame_idx = min(self.total_frames - 1, self.frame_idx + step)
-        
-        self.show_frame(self.frame_idx)
-        
-        # Continue playback or stop at end
-        if self.playing and self.frame_idx < self.total_frames - 1:
-            self.timer_active = False
-            self._schedule_next_frame()
-        else:
-            self._stop_playback()
+        while True:
+            """Update to next frame during playback"""
+            self.calculate_performance('frame')
+            # Calculate frame step based on speed
+            step = int(self.speed) if self.speed >= 1.0 else 1
+            self.frame_idx = min(self.total_frames - 1, self.frame_idx + step)
+            
+            # Continue playback or stop at end
+            if self.playing and self.frame_idx < self.total_frames - 1:
+                self.show_frame(self.frame_idx)
+            else:
+                time.sleep(0.01)
     
     def _stop_playback(self):
         """Stop playback and update UI"""
         self.playing = False
-        self.timer_active = False
-        self.gui.stop_timer()
         
         play_btn = self.gui.get_component("control_buttons_btn_1")  # Play is the second button (index 1)
         if self.backend_name == 'tkinter':
@@ -398,7 +454,6 @@ class VideoFlowPlayer:
         
         # Restart timer if playing
         if self.playing:
-            self.timer_active = False
             self.gui.stop_timer()
             self._schedule_next_frame()
     
@@ -413,7 +468,6 @@ class VideoFlowPlayer:
         
         # Restart timer if playing
         if self.playing:
-            self.timer_active = False
             self.gui.stop_timer()
             self._schedule_next_frame()
     
