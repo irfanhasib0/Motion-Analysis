@@ -39,29 +39,21 @@ class VideoFlowPlayer:
         self.playing = False
         self.speed = 1.0
         self.prev_gray = None
+        self.flow_vis  = None
         self.flow_mode = "dense"
         
+        # Performance tracking
+        self.perf_info = {}
+        self.perf_keys = ['frame', 'flow', 'gui']
+
         # UI state
         self.setup_ui()
         self.frame_thread = threading.Thread(target=self._update_frame, daemon=True)
-        # Performance tracking
-        self.perf_info = {
-            'update_frame': {
-            'fps': 0.0,
-            'ms': 0.0,
-            'itr': 0.0,
-            'time': time.time()
-            },
-            'gui_update': {
-            'fps': 0.0,
-            'itr': 0.0,
-            'ms': 0.0,
-            'time': time.time()
-            }
-        }
+        self.flow_thread = threading.Thread(target=self._compute_optical_flow, daemon=True)
+        
         
         # Performance display labels (will be created in setup_ui)
-        self.perf_frame = None
+        self.calculate_performance('frame')
         self.open_file(path='../../tokyo.mov')
     
     def calculate_performance(self,  key):
@@ -73,11 +65,12 @@ class VideoFlowPlayer:
                 'fps': 0.0,
                 'ms': 0.0,
                 'itr': 0.0,
-                'time': current_time,
+                'init_time': current_time,
+                'end_time': current_time,
                 'fps_time': current_time
             }
         
-        self.perf_info[key]['ms']   = (current_time - self.perf_info[key]['time']) * 1000.0  # ms
+        self.perf_info[key]['ms']   = (self.perf_info[key]['end_time'] - self.perf_info[key]['init_time']) * 1000.0  # ms
         self.perf_info[key]['time'] = current_time
         
         self.perf_info[key]['itr'] += 1
@@ -90,7 +83,7 @@ class VideoFlowPlayer:
         # Update performance labels
         self.gui.update_text(
             key, 
-            f"Frame Update: {self.perf_info[key]['ms']:.1f}ms ({self.perf_info[key]['fps']:.1f} FPS)"
+            f"{key.capitalize()} Update:".ljust(20) + f"{self.perf_info[key]['ms']:.1f}ms ({self.perf_info[key]['fps']:.1f} FPS)"
         )
 
     def _create_performance_display(self, parent):
@@ -100,23 +93,19 @@ class VideoFlowPlayer:
             parent, "perf_title", "Performance Monitoring:", 
             10, 5
         )
-        
-        self.gui.create_label(
-            parent, "frame", 
-            "Frame Update: 0.0ms (0.0 FPS)", 
-            200, 5
-        )
-        
-        self.gui.create_label(
-            parent, "gui", 
-            "GUI Update: 0.0ms (0.0 FPS)", 
-            400, 5
-        )
+        _h = 25
+        for key in self.perf_keys:
+            self.gui.create_label(
+                parent, key, 
+                f"{key.capitalize()} Update: 0.0ms (0.0 FPS)", 
+                10, _h
+            )
+            _h += 20
 
     def setup_ui(self):
         """Setup the user interface"""
         window_width = 1350
-        window_height = 650
+        window_height = 480 + 320 + 40
         
         self.window = self.gui.create_window(
             f"Video + Optical Flow Viewer ({self.backend_name.upper()})", 
@@ -137,7 +126,7 @@ class VideoFlowPlayer:
         )
 
         info_frame = self.gui.create_frame(
-            self.window, "info_frame", 0, 110, window_width, 40
+            self.window, "info_frame", 0, 110, window_width, 200
         )
         
         # Create flow mode controls
@@ -145,7 +134,7 @@ class VideoFlowPlayer:
         
         # Video display frame
         display_frame = self.gui.create_frame(
-            self.window, "display_frame", 0, 150, window_width, DISPLAY_H + 20
+            self.window, "display_frame", 0, 320, window_width, 320+DISPLAY_H + 20
         )
         
         # Create video displays
@@ -229,25 +218,28 @@ class VideoFlowPlayer:
         title_text = f"Optical Flow - {mode.capitalize()}"
         self.gui.update_text("right_title", title_text)
         
-        # Recompute current frame if video is loaded
-        if self.cap and self.prev_gray is not None:
-            self.show_frame(self.frame_idx)
-    
     def open_file(self, path=None):
-        if path is None:
+        if path is None or path == False:
             """Open video file dialog"""
             filetypes = [
                 ("Video files", "*.mp4 *.avi *.mov *.mkv"), 
                 ("All files", "*.*")
             ]
             path = self.gui.show_file_dialog(filetypes)
-        
+
         if path is None:
             return
         
         self.release_video()
+        print(f"Opening video file: {path}")
         self.cap = cv2.VideoCapture(path)
-        
+        self.cap.set(cv2.CAP_PROP_FPS, 30)
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+        print(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        print(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        print(self.cap.get(cv2.CAP_PROP_FPS))
+
         if not self.cap.isOpened():
             error_msg = f"Failed to open: {path.split('/')[-1]}"
             self.gui.update_text("status_label", error_msg)
@@ -278,6 +270,7 @@ class VideoFlowPlayer:
         self.playing = not self.playing
         if self.playing and not self.frame_thread.is_alive():
                 self.frame_thread.start()
+                self.flow_thread.start()
         
         # Update button text - find the play button
         play_btn = self.gui.get_component("control_buttons_btn_1")  # Play is the second button (index 1)
@@ -292,6 +285,7 @@ class VideoFlowPlayer:
         while True:
             """Update to next frame during playback"""
             self.calculate_performance('frame')
+            self.perf_info['frame']['init_time'] = time.time()
             # Calculate frame step based on speed
             step = int(self.speed) if self.speed >= 1.0 else 1
             self.frame_idx = min(self.total_frames - 1, self.frame_idx + step)
@@ -301,6 +295,9 @@ class VideoFlowPlayer:
                 self.show_frame(self.frame_idx)
             else:
                 time.sleep(0.01)
+            self.perf_info['frame']['end_time'] = time.time()
+            
+            
     
     def _stop_playback(self):
         """Stop playback and update UI"""
@@ -316,42 +313,29 @@ class VideoFlowPlayer:
         """Display frame and compute optical flow"""
         if not self.cap:
             return
-        
         # Clamp frame index
         idx = int(max(0, min(self.total_frames - 1, idx)))
         
         # Set video position and read frame
-        self.cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+        #self.cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
         ret, frame = self.cap.read()
-        
         if not ret:
             self.gui.update_text("status_label", "Failed to read frame")
             return
-        
         self.frame_idx = idx
-        
         # Process frame
-        frame_bgr = frame.copy()
-        frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-        gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
-        
-        # Compute optical flow
-        if self.prev_gray is None:
-            flow_vis = np.zeros_like(frame_rgb)
-        else:
-            if self.flow_mode == "dense":
-                flow_vis = self._compute_dense_flow(self.prev_gray, gray)
-            else:
-                flow_vis = self._compute_sparse_flow(self.prev_gray, gray, frame_bgr)
-        
-        self.prev_gray = gray
+        self.frame_bgr = frame.copy()
+        self.gray = cv2.cvtColor(self.frame_bgr, cv2.COLOR_BGR2GRAY)
+                        
         
         # Resize images for display
         frame_resized = ImageProcessor.preprocess_for_display(
-            frame_rgb, DISPLAY_W, DISPLAY_H, maintain_aspect=False
+            self.frame_bgr, DISPLAY_W, DISPLAY_H, maintain_aspect=False
         )
+        if self.flow_vis is None:
+            self.flow_vis = np.zeros_like(self.frame_bgr)
         flow_resized = ImageProcessor.preprocess_for_display(
-            flow_vis, DISPLAY_W, DISPLAY_H, maintain_aspect=False
+            self.flow_vis, DISPLAY_W, DISPLAY_H, maintain_aspect=False
         )
         
         # Update displays
@@ -362,7 +346,7 @@ class VideoFlowPlayer:
         status_text = (f"Frame {self.frame_idx+1}/{self.total_frames} | "
                       f"Mode: {self.flow_mode} | Speed: {self.speed}x")
         self.gui.update_text("status_label", status_text)
-    
+        
     def _compute_dense_flow(self, prev_gray, gray):
         """Compute dense optical flow using Farneback method"""
         flow = cv2.calcOpticalFlowFarneback(
@@ -423,6 +407,32 @@ class VideoFlowPlayer:
         out = cv2.add(vis_bgr, mask)
         return cv2.cvtColor(out, cv2.COLOR_BGR2RGB)
     
+    def _compute_optical_flow(self):
+        while True:
+            self.calculate_performance('flow')
+            self.perf_info['flow']['init_time'] = time.time()
+            print("Waiting for previous frame...")
+            if self.prev_gray is None:
+                self.prev_gray = self.gray.copy()
+            print("Computing optical flow...")
+            with threading.Lock():
+                frame_bgr = self.frame_bgr.copy()
+                gray      = self.gray.copy()
+                prev_gray = self.prev_gray.copy()
+            # Compute optical flow
+            if prev_gray is None:
+                flow_vis = np.zeros_like(frame_bgr)
+            else:
+                if self.flow_mode == "dense":
+                    flow_vis = self._compute_dense_flow(prev_gray, gray)
+                else:
+                    flow_vis = self._compute_sparse_flow(prev_gray, gray, frame_bgr)
+                    
+            with threading.Lock():
+                self.flow_vis = flow_vis
+                self.prev_gray = gray
+            self.perf_info['flow']['end_time'] = time.time()
+
     def next_frame(self):
         """Advance to next frame"""
         if not self.cap:
