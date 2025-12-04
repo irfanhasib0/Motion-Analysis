@@ -14,5 +14,5 @@ docker run -d --rm --gpus all \
     -e MESA_GL_VERSION_OVERRIDE=3.3 \
     --net=host \
     -p 8001:8001 \
-    -w /projects/Motion-Analysis/keypoint_tracking/ \
+    -w /projects/Motion-Analysis/ \
     --name cv-env cv-env bash -c "jupyter lab --allow-root --ip=0.0.0.0 --port=8001 --LabApp.token='' --notebook-dir='/projects'"

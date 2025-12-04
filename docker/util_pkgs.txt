@@ -33,6 +33,13 @@ ffmpeg-python==0.2.0
 # ML utilities, metrics & evaluation
 pycocotools==2.0.8
 
+# ONNX export
+onnx==1.16.0
+onnxruntime==1.17.1
+munkres==1.1.4
+#numpy==1.26.3
+xtcocotools==1.14.3
+
 # Misc / developer utilities
 tqdm==4.66.5
 requests==2.32.3

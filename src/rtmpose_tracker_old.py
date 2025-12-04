@@ -134,7 +134,6 @@ For detailed flowchart see: docs/pose2d_inferencer_forward_flowchart.md
 #wget https://download.openmmlab.com/mmpose/v1/projects/rtmpose/rtmpose-m_simcc-aic-coco_pt-aic-coco_420e-256x192-63eb25f7_20230126.pth
 import cv2
 import time
-import torch
 import numpy as np
 import sys
 import logging
@@ -146,17 +145,6 @@ sys.path.append(str(Path('../libs') / 'mmengine'))
 sys.path.append(str(Path('../libs') / 'mmcv'))
 sys.path.append(str(Path('../libs') / 'mmdetection'))
 sys.path.append(str(Path('../libs') / 'mmpose'))
-
-from mmpose.apis import MMPoseInferencer
-from mmpose.apis.inferencers import Pose2DInferencer
-from mmdet.apis import DetInferencer
-from mmpose.structures import PoseDataSample
-from mmdet.apis import init_detector
-from mmpose.apis import init_model
-from mmdet.structures import DetDataSample
-from mmengine.structures import InstanceData
-from mmpose.codecs.simcc_label import SimCCLabel
-from mmpose.utils.tensor_utils import to_numpy       
 
 #pose2d = 'configs/body_2d_keypoint/topdown_heatmap/coco/td-hm_hrnet-w32_8xb64-210e_coco-256x192.py'
 #pose_weights = 'https://download.openmmlab.com/mmpose/top_down/hrnet/hrnet_w32_coco_256x192-c78dce93_20200708.pth'
@@ -286,11 +274,258 @@ class SimpleTracker:
         
         return result
 
+class ONNXInferenceWrapper:
+    """
+    Wrapper for ONNX-based pose estimation.
+    Provides the same interface as MMPoseInferencer but uses ONNX Runtime.
+    """
+    
+    def __init__(self, det_onnx_path, pose_onnx_path, device='cpu'):
+        """
+        Initialize ONNX wrapper
+        
+        Args:
+            det_onnx_path: Path to detection ONNX model
+            pose_onnx_path: Path to pose estimation ONNX model
+            device: 'cpu' or 'cuda'
+        """
+        import onnxruntime as ort
+        
+        # Setup ONNX Runtime providers
+        if device == 'cuda':
+            providers = ['CUDAExecutionProvider', 'CPUExecutionProvider']
+        else:
+            providers = ['CPUExecutionProvider']
+        
+        # Load ONNX models
+        self.det_session = ort.InferenceSession(det_onnx_path, providers=providers)
+        self.pose_session = ort.InferenceSession(pose_onnx_path, providers=providers)
+        
+        # Get model metadata
+        self.det_input_name = self.det_session.get_inputs()[0].name
+        self.det_input_shape = self.det_session.get_inputs()[0].shape
+        self.pose_input_name = self.pose_session.get_inputs()[0].name
+        self.pose_input_shape = self.pose_session.get_inputs()[0].shape
+        
+        # Preprocessing parameters (ImageNet statistics)
+        self.mean = np.array([123.675, 116.28, 103.53], dtype=np.float32)
+        self.std = np.array([58.395, 57.12, 57.375], dtype=np.float32)
+        
+        logging.info(f"ONNX Detection model loaded: {det_onnx_path}")
+        logging.info(f"  Input: {self.det_input_name}, Shape: {self.det_input_shape}")
+        logging.info(f"ONNX Pose model loaded: {pose_onnx_path}")
+        logging.info(f"  Input: {self.pose_input_name}, Shape: {self.pose_input_shape}")
+    
+    def preprocess_image(self, image, target_size):
+        """Preprocess image for ONNX model input"""
+        # Resize
+        img = cv2.resize(image, target_size)
+        # BGR to RGB
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        # Normalize
+        img = (img - self.mean) / self.std
+        # HWC to CHW
+        img = img.transpose(2, 0, 1)
+        # Add batch dimension
+        img = np.expand_dims(img, 0).astype(np.float32)
+        return img
+    
+    def run_detection(self, frame, conf_threshold=0.3):
+        """Run detection on frame and return bboxes"""
+        h, w = frame.shape[:2]
+        target_h, target_w = self.det_input_shape[2], self.det_input_shape[3]
+        import pdb; pdb.set_trace()
+        # Preprocess
+        input_tensor = self.preprocess_image(frame, (target_w, target_h))
+        
+        # Run inference
+        outputs = self.det_session.run(None, {self.det_input_name: input_tensor})
+        
+        # RTMDet outputs: [cls_scores (3 scales), bbox_preds (3 scales)]
+        # Typically outputs[0-2] are classification scores, outputs[3-5] are bbox predictions
+        bboxes = []
+        scale_x = w / target_w
+        scale_y = h / target_h
+        
+        # Process each scale
+        num_scales = len(outputs) // 2
+        for scale_idx in range(num_scales):
+            cls_scores = outputs[scale_idx]  # Shape: [batch, num_anchors, num_classes]
+            bbox_preds = outputs[scale_idx + num_scales]  # Shape: [batch, num_anchors, 4]
+            
+            # Remove batch dimension
+            cls_scores = cls_scores[0]
+            bbox_preds = bbox_preds[0]
+            
+            # Get person class scores (class 0 in COCO)
+            person_scores = cls_scores[0]
+            
+            # Filter by confidence threshold
+            valid_indices = person_scores > conf_threshold
+            import pdb; pdb.set_trace()
+            if not np.any(valid_indices):
+                continue
+            
+            valid_bboxes = bbox_preds[valid_indices]
+            valid_scores = person_scores[valid_indices]
+            
+            # Convert bbox format (usually center_x, center_y, w, h or x1, y1, x2, y2)
+            for bbox, score in zip(valid_bboxes, valid_scores):
+                # Assuming bbox format is [x1, y1, x2, y2]
+                x1, y1, x2, y2 = bbox
+                
+                # Scale back to original image size
+                x1 = np.clip(x1 * scale_x, 0, w)
+                y1 = np.clip(y1 * scale_y, 0, h)
+                x2 = np.clip(x2 * scale_x, 0, w)
+                y2 = np.clip(y2 * scale_y, 0, h)
+                
+                bboxes.append([x1, y1, x2, y2, float(score)])
+        
+        # Apply NMS to remove duplicate detections
+        if len(bboxes) > 0:
+            bboxes = self._apply_nms(bboxes, iou_threshold=0.5)
+        
+        return bboxes
+    
+    def run_pose(self, frame, bbox):
+        """Run pose estimation on cropped bbox region"""
+        # Crop bbox region with margin
+        x1, y1, x2, y2 = [int(coord) for coord in bbox[:4]]
+        margin = 10
+        x1 = max(0, x1 - margin)
+        y1 = max(0, y1 - margin)
+        x2 = min(frame.shape[1], x2 + margin)
+        y2 = min(frame.shape[0], y2 + margin)
+        
+        crop = frame[y1:y2, x1:x2]
+        if crop.size == 0:
+            return None, None
+        
+        crop_h, crop_w = crop.shape[:2]
+        target_h, target_w = self.pose_input_shape[2], self.pose_input_shape[3]
+        
+        # Preprocess
+        input_tensor = self.preprocess_image(crop, (target_w, target_h))
+        
+        # Run inference
+        outputs = self.pose_session.run(None, {self.pose_input_name: input_tensor})
+        
+        # Postprocess - adjust based on your pose model output format
+        pose_output = outputs[0][0]  # Remove batch dimension
+        
+        keypoints = []
+        keypoint_scores = []
+        
+        # Handle different output formats
+        if len(pose_output.shape) == 2 and pose_output.shape[1] == 2:
+            # Format: [num_keypoints, 2] - xy coordinates
+            scale_x = crop_w / target_w
+            scale_y = crop_h / target_h
+            
+            for kpt in pose_output:
+                x_abs = x1 + (kpt[0] * scale_x)
+                y_abs = y1 + (kpt[1] * scale_y)
+                keypoints.append([x_abs, y_abs])
+                keypoint_scores.append(1.0)  # No confidence in this format
+        
+        elif len(pose_output.shape) == 2 and pose_output.shape[1] == 3:
+            # Format: [num_keypoints, 3] - xy + confidence
+            scale_x = crop_w / target_w
+            scale_y = crop_h / target_h
+            
+            for kpt in pose_output:
+                x_abs = x1 + (kpt[0] * scale_x)
+                y_abs = y1 + (kpt[1] * scale_y)
+                keypoints.append([x_abs, y_abs])
+                keypoint_scores.append(float(kpt[2]))
+        
+        elif len(pose_output.shape) == 3:
+            # Format: [num_keypoints, h, w] - heatmaps
+            for heatmap in pose_output:
+                # Find max location
+                max_idx = np.unravel_index(heatmap.argmax(), heatmap.shape)
+        return np.array(keypoints), np.array(keypoint_scores)
+    
+    def _apply_nms(self, bboxes, iou_threshold=0.5):
+        """Apply Non-Maximum Suppression to bboxes"""
+        if len(bboxes) == 0:
+            return []
+        
+        bboxes = np.array(bboxes)
+        x1 = bboxes[:, 0]
+        y1 = bboxes[:, 1]
+        x2 = bboxes[:, 2]
+        y2 = bboxes[:, 3]
+        scores = bboxes[:, 4]
+        
+        areas = (x2 - x1) * (y2 - y1)
+        order = scores.argsort()[::-1]
+        
+        keep = []
+        while order.size > 0:
+            i = order[0]
+            keep.append(i)
+            
+            xx1 = np.maximum(x1[i], x1[order[1:]])
+            yy1 = np.maximum(y1[i], y1[order[1:]])
+            xx2 = np.minimum(x2[i], x2[order[1:]])
+            yy2 = np.minimum(y2[i], y2[order[1:]])
+            
+            w = np.maximum(0.0, xx2 - xx1)
+            h = np.maximum(0.0, yy2 - yy1)
+            inter = w * h
+            
+            iou = inter / (areas[i] + areas[order[1:]] - inter)
+            
+            inds = np.where(iou <= iou_threshold)[0]
+            order = order[inds + 1]
+        
+        return bboxes[keep].tolist()
+    
+    def __call__(self, frame, return_vis=False):
+        """
+        Main inference method - mimics MMPoseInferencer interface
+        
+        Args:
+            frame: Input frame (numpy array or path)
+            return_vis: Whether to return visualization (not implemented for ONNX)
+        
+        Yields:
+            dict: Results in the same format as MMPoseInferencer
+        """
+        # Load image if path is provided
+        if isinstance(frame, str):
+            frame = cv2.imread(frame)
+        
+        # Run detection
+        bboxes = self.run_detection(frame, conf_threshold=0.3)
+        # Run pose for each detected person
+        predictions = []
+        for bbox in bboxes:
+            keypoints, keypoint_scores = self.run_pose(frame, bbox)
+            
+            if keypoints is not None:
+                predictions.append({
+                    'keypoints': keypoints,
+                    'keypoint_scores': keypoint_scores,
+                    'bbox': [bbox[:4]]  # Wrap in list to match MMPose format
+                })
+        
+        # Return in MMPoseInferencer format
+        result = {
+            'predictions': [predictions],
+            'visualization': None
+        }
+        
+        yield result
+
+
 class RTMPoseTracker:
     """Main class for RTMPose tracking"""
     
     def __init__(self, model_alias='human', device='cpu', conf_threshold=0.3, 
-                 use_onnx_det=False, use_onnx_pose=False, det_onnx_path=None, pose_onnx_path=None):
+                 use_onnx=False, det_onnx_path=None, pose_onnx_path=None):
         """
         Initialize RTMPose tracker
         
@@ -298,370 +533,71 @@ class RTMPoseTracker:
             model_alias: Model alias ('human', 'body26', 'wholebody', etc.)
             device: Device to run on ('cpu', 'cuda')
             conf_threshold: Detection confidence threshold
-            use_onnx_det: If True, use ONNX detection model instead of PyTorch
-            use_onnx_pose: If True, use ONNX pose estimation model instead of PyTorch
-            det_onnx_path: Path to detection ONNX model (required if use_onnx_det=True)
-            pose_onnx_path: Path to pose estimation ONNX model (required if use_onnx_pose=True)
+            use_onnx: If True, use ONNX wrapper instead of MMPose
+            det_onnx_path: Path to detection ONNX model (required if use_onnx=True)
+            pose_onnx_path: Path to pose estimation ONNX model (required if use_onnx=True)
         """
-        import onnxruntime as ort
-        
         self.conf_threshold = conf_threshold
         self.tracker = SimpleTracker(max_disappeared=30, max_distance=100)
-        self.device = device
+        self.use_onnx = use_onnx
         
-        self.decoder = SimCCLabel(
-                    input_size=(256, 192),
-                    sigma=(4.9, 5.66),
-                    simcc_split_ratio=2,
-                    normalize=False,
-                    use_dark=True
-                )
-        if use_onnx_det:
-            # Setup ONNX Runtime providers
-            providers = ["CUDAExecutionProvider", "CPUExecutionProvider"] if device == 'cuda' else ["CPUExecutionProvider"]
+        if use_onnx:
+            # Use ONNX wrapper
+            if not det_onnx_path or not pose_onnx_path:
+                raise ValueError("Both det_onnx_path and pose_onnx_path must be provided when use_onnx=True")
             
-            # Load detection ONNX model
-            self.det_session = ort.InferenceSession(det_onnx_path, providers=providers)
-            logging.info(f"Loaded detection ONNX model from {det_onnx_path}")
-            
-            # Get model input/output info
-            self.det_input_name = self.det_session.get_inputs()[0].name
-            self.det_input_shape = self.det_session.get_inputs()[0].shape
-            logging.info(f"Detection input: {self.det_input_name}, shape: {self.det_input_shape}")
-            
-            self.det_mean = np.array([123.675, 116.28, 103.53], dtype=np.float32)
-            self.det_std = np.array([58.395, 57.12, 57.375], dtype=np.float32)
-        else:
-            # Build and load detection model directly from config and weights
-            self.det_model = init_detector(
-                config=det_model,
-                checkpoint=det_weights,
+            self.inferencer = ONNXInferenceWrapper(
+                det_onnx_path=det_onnx_path,
+                pose_onnx_path=pose_onnx_path,
                 device=device
             )
-            self.det_session = None
-
-        if use_onnx_pose:
-            # Setup ONNX Runtime providers
-            providers = ["CUDAExecutionProvider", "CPUExecutionProvider"] if device == 'cuda' else ["CPUExecutionProvider"]
-
-            # Load pose estimation ONNX model
-            self.pose_session = ort.InferenceSession(pose_onnx_path, providers=providers)
-            logging.info(f"Loaded pose estimation ONNX model from {pose_onnx_path}")
-            self.pose_input_name = self.pose_session.get_inputs()[0].name
-            self.pose_input_shape = self.pose_session.get_inputs()[0].shape
-            logging.info(f"Pose input: {self.pose_input_name}, shape: {self.pose_input_shape}")
-            self.pose_mean = np.array([123.675, 116.28, 103.53], dtype=np.float32)
-            self.pose_std = np.array([58.395, 57.12, 57.375], dtype=np.float32)
+            logging.info(f"Initialized with ONNX models")
         else:
-            # Build and load pose model directly from config and weights
-            self.pose_model = init_model(
-                config=pose2d,
-                checkpoint=pose2d_weights,
+            # Use original MMPose inferencer
+            from mmpose.apis import MMPoseInferencer
+            
+            self.inferencer = MMPoseInferencer(
+                pose2d=pose2d,
+                pose2d_weights=pose2d_weights,
+                det_model=det_model,
+                det_weights=det_weights,
+                det_cat_ids=[0],  # Person class
                 device=device
             )
             logging.info(f"RTMPose inferencer initialized with model: {model_alias}")
-            self.pose_session = None
-    
-    def preprocess_for_detection(self, frame):
-        """Preprocess frame for ONNX detection model"""
-        # Get target size from model input shape
-        target_h, target_w = self.det_input_shape[2], self.det_input_shape[3]
+
+    def process_frame(self, frame):
+        """Process a single frame and return results"""
+        # Run inference (works with both MMPose and ONNX wrapper due to same interface)
+        result_generator = self.inferencer(frame, return_vis=False)
+        result = next(result_generator)
         
-        # Resize frame
-        img_resized = cv2.resize(frame, (target_w, target_h))
+        # Extract predictions
+        predictions = result['predictions'][0] if result['predictions'] else []
         
-        # Convert BGR to RGB
-        img_rgb = cv2.cvtColor(img_resized, cv2.COLOR_BGR2RGB)
-        
-        # Normalize
-        img_normalized = (img_rgb - self.det_mean) / self.det_std
-        
-        # HWC to CHW
-        img_transposed = img_normalized.transpose(2, 0, 1)
-        
-        # Add batch dimension
-        img_batch = np.expand_dims(img_transposed, axis=0).astype(np.float32)
-        
-        # Calculate scale factors for bbox adjustment
-        scale_x = frame.shape[1] / target_w
-        scale_y = frame.shape[0] / target_h
-        
-        return img_batch, (scale_x, scale_y)
-    
-    def preprocess_for_pose(self, img_crop):
-        """Preprocess cropped image for ONNX pose model"""
-        # Get target size from model input shape
-        target_h, target_w = self.pose_input_shape[2], self.pose_input_shape[3]
-        
-        # Resize crop
-        img_resized = cv2.resize(img_crop, (target_w, target_h))
-        
-        # Convert BGR to RGB
-        img_rgb = cv2.cvtColor(img_resized, cv2.COLOR_BGR2RGB)
-        
-        # Normalize
-        img_normalized = (img_rgb - self.pose_mean) / self.pose_std
-        
-        # HWC to CHW
-        img_transposed = img_normalized.transpose(2, 0, 1)
-        
-        # Add batch dimension
-        img_batch = np.expand_dims(img_transposed, axis=0).astype(np.float32)
-        
-        return img_batch
-    
-    def postprocess_detection(self, det_output, scale_factors, conf_threshold=0.3):
-        """Postprocess detection output from ONNX model"""
-        scale_x, scale_y = scale_factors
-        bboxes = []
-        
-        # Handle different output formats
-        if isinstance(det_output, (list, tuple)):
-            det_output = det_output[0]
-        
-        # Assuming output shape: [batch, num_detections, 6] where 6 = [x1, y1, x2, y2, conf, class]
-        for detection in det_output[0]:
-            if len(detection) >= 5:
-                conf = detection[4]
-                if conf > conf_threshold:
-                    x1, y1, x2, y2 = detection[:4]
-                    bbox = {
-                        'bbox': [x1 * scale_x, y1 * scale_y, x2 * scale_x, y2 * scale_y],
-                        'score': float(conf)
-                    }
-                    
-                    if len(detection) >= 6:
-                        cls = int(detection[5])
-                        if cls == 0:  # Person class
-                            bboxes.append(bbox)
-                    else:
-                        bboxes.append(bbox)
-        
-        return bboxes
-    
-    def postprocess_pose(self, pose_output, bbox, orig_crop_shape):
-        """Postprocess pose output from ONNX model"""
-        if isinstance(pose_output, (list, tuple)):
-            pose_output = pose_output[0]
-        
-        keypoints = []
-        keypoint_scores = []
-        
-        # Handle different output formats
-        if len(pose_output.shape) == 3 and pose_output.shape[2] == 2:
-            # Format: [batch, num_keypoints, 2]
-            kpts = pose_output[0]
-            model_h, model_w = self.pose_input_shape[2], self.pose_input_shape[3]
-            crop_h, crop_w = orig_crop_shape[:2]
-            scale_x = crop_w / model_w
-            scale_y = crop_h / model_h
-            
-            for kpt in kpts:
-                x, y = kpt[0] * scale_x, kpt[1] * scale_y
-                x_abs = bbox['bbox'][0] + x
-                y_abs = bbox['bbox'][1] + y
-                keypoints.append([x_abs, y_abs])
-                keypoint_scores.append(1.0)
-        
-        elif len(pose_output.shape) == 3 and pose_output.shape[2] == 3:
-            # Format: [batch, num_keypoints, 3]
-            kpts = pose_output[0]
-            model_h, model_w = self.pose_input_shape[2], self.pose_input_shape[3]
-            crop_h, crop_w = orig_crop_shape[:2]
-            scale_x = crop_w / model_w
-            scale_y = crop_h / model_h
-            
-            for kpt in kpts:
-                x, y, conf = kpt[0] * scale_x, kpt[1] * scale_y, kpt[2]
-                x_abs = bbox['bbox'][0] + x
-                y_abs = bbox['bbox'][1] + y
-                keypoints.append([x_abs, y_abs])
-                keypoint_scores.append(float(conf))
-        
-        elif len(pose_output.shape) == 4:
-            # Heatmap format: [batch, num_keypoints, h, w]
-            heatmaps = pose_output[0]
-            
-            for heatmap in heatmaps:
-                max_idx = np.unravel_index(heatmap.argmax(), heatmap.shape)
-                y_hm, x_hm = max_idx
-                confidence = heatmap[y_hm, x_hm]
-                
-                hm_h, hm_w = heatmap.shape
-                crop_h, crop_w = orig_crop_shape[:2]
-                
-                x = (x_hm / hm_w) * crop_w
-                y = (y_hm / hm_h) * crop_h
-                x_abs = bbox['bbox'][0] + x
-                y_abs = bbox['bbox'][1] + y
-                
-                keypoints.append([x_abs, y_abs])
-                keypoint_scores.append(float(confidence))
-        
-        return np.array(keypoints), np.array(keypoint_scores)
-    
-    def process_frame_onnx(self, frame):
-        """Process frame using ONNX models"""
+        # Process detections for tracking
         detections = []
-        
-        # Step 1: Run detection
-        det_input, scale_factors = self.preprocess_for_detection(frame)
-        det_output = self.det_session.run(None, {self.det_input_name: det_input})
-        bboxes = self.postprocess_detection(det_output, scale_factors, self.conf_threshold)
-        
-        # Step 2: Run pose estimation for each detected person
-        for bbox in bboxes:
-            x1, y1, x2, y2 = [int(coord) for coord in bbox['bbox']]
-            
-            # Expand bbox slightly
-            margin = 10
-            x1 = max(0, x1 - margin)
-            y1 = max(0, y1 - margin)
-            x2 = min(frame.shape[1], x2 + margin)
-            y2 = min(frame.shape[0], y2 + margin)
-            
-            person_crop = frame[y1:y2, x1:x2]
-            if person_crop.size == 0:
-                continue
-            
-            orig_crop_shape = person_crop.shape
-            pose_input = self.preprocess_for_pose(person_crop)
-            pose_output = self.pose_session.run(None, {self.pose_input_name: pose_input})
-            keypoints, keypoint_scores = self.postprocess_pose(pose_output, 
-                                                              {'bbox': [x1, y1, x2, y2]}, 
-                                                              orig_crop_shape)
-            
-            if len(keypoints) > 0:
-                avg_score = np.mean(keypoint_scores)
+        for pred in predictions:
+            if 'keypoint_scores' in pred:
+                # Check if detection confidence is above threshold
+                avg_score = np.mean(pred['keypoint_scores'])
                 if avg_score >= self.conf_threshold:
-                    valid_kpts = keypoints[keypoint_scores > 0.3]
+                    # Calculate centroid from keypoints
+                    keypoints = pred['keypoints']
+                    valid_kpts = keypoints
                     if len(valid_kpts) > 0:
                         centroid = np.mean(valid_kpts, axis=0)
                         detections.append({
                             'centroid': centroid,
                             'keypoints': keypoints,
-                            'keypoint_scores': keypoint_scores,
-                            'bbox': [[x1, y1, x2, y2]]
+                            'keypoint_scores': pred['keypoint_scores'],
+                            'bbox': pred.get('bbox', None)
                         })
         
+        # Update tracker
         tracked_objects = self.tracker.update(detections)
+        
         return tracked_objects
-    
-    def process_frame_pytorch(self, frame):
-        """Process frame using PyTorch/MMPose models with bare minimum inference"""
-        detections = []
-        
-        # Step 1: Direct detection inference
-        # Preprocess frame for detection
-        ori_shape = torch.tensor(frame.shape[:2])
-        frame_rsz = cv2.resize(frame, (640,640))
-        img_shape = torch.tensor(frame_rsz.shape[:2])
-        scale_h = ori_shape[0] / img_shape[0]
-        scale_w = ori_shape[1] / img_shape[1]
-        # Create detection data sample with metadata
-        det_data_sample = DetDataSample()
-        det_data_sample.set_metainfo({
-            'img_shape': img_shape,  # (height, width)
-            'ori_shape': ori_shape,
-            'scale_factor': [1.0, 1.0], #torch.tensor([ori_shape[0]/img_shape[0], ori_shape[1]/img_shape[1]]),
-            'img_id': frame_count if 'frame_count' in locals() else 0
-        })
-        
-        det_data = self.det_model.data_preprocessor(
-            data={'inputs': torch.tensor(frame_rsz[None]).permute(0, 3, 1, 2).float(), 
-              'data_samples': [det_data_sample]},
-            training=False
-        )
-        
-        # Run detection model forward pass
-        with torch.no_grad():
-            det_results = self.det_model(**det_data, mode='predict')
-        #import pdb; pdb.set_trace()
-        # Extract person detections (class_id=0)
-        for det_result in det_results:
-            pred_instances = det_result.pred_instances
-            person_mask = pred_instances.labels == 0
-            person_bboxes = pred_instances.bboxes[person_mask].cpu().numpy()
-            person_scores = pred_instances.scores[person_mask].cpu().numpy()
-            
-            # Step 2: For each detected person, run pose estimation
-            for bbox, score in zip(person_bboxes, person_scores):
-                if score < self.conf_threshold:
-                    continue
-                
-                x1, y1, x2, y2 = bbox.astype(int)
-                x1, y1 = max(0, x1), max(0, y1)
-                #x2, y2 = min(frame.shape[1], x2), min(frame.shape[0], y2)
-                x1, y1 = int(x1 * scale_w), int(y1 * scale_h)
-                x2, y2 = int(x2 * scale_w), int(y2 * scale_h)
-
-                person_crop = frame[y1:y2, x1:x2]
-                if person_crop.size == 0:
-                    print(f"Empty crop for bbox: {(x1, y1, x2, y2)}")
-                    continue
-
-                '''
-                # Create pose data sample with bbox
-                pose_data_sample = PoseDataSample()
-                pose_data_sample.set_metainfo({
-                    'img_shape': torch.tensor(frame.shape[:2]),
-                    'input_size': torch.tensor((192, 256))
-                })
-                pose_data_sample.set_metainfo(self.pose_model.dataset_meta)
-                inst = InstanceData()
-                inst.bboxes = torch.tensor([[x1, y1, x2, y2]], dtype=torch.float32)
-                inst.bbox_scores = torch.tensor([score], dtype=torch.float32)
-                inst.bbox_centers = torch.tensor([[(x1 + x2) / 2, (y1 + y2) / 2]], dtype=torch.float32)
-                inst.bbox_scales = torch.tensor([[(x2 - x1), (y2 - y1)]], dtype=torch.float32)
-                pose_data_sample.gt_instances = inst
-                # Crop and preprocess for pose model
-                
-                # Resize to model input size
-                resized_crop = torch.tensor(cv2.resize(person_crop, (192, 256))).permute(2, 0, 1).float()
-                
-                # Preprocess for pose model
-                pose_data = self.pose_model.data_preprocessor({
-                    'inputs': [resized_crop],
-                    'data_samples': [pose_data_sample]
-                }, False)
-
-                # Run pose model forward pass
-                #with torch.no_grad():
-                #    pose_res = self.pose_model.forward(**pose_data, mode='tensor')
-                '''
-                person_crop = self.preprocess_for_pose(person_crop)
-                pose_res = self.pose_session.run(None, {self.pose_input_name: person_crop})
-                for i in range(len(pose_res)):
-                    pose_res[i] = torch.tensor(pose_res[i])
-                pose_res = to_numpy(pose_res, unzip=True)
-                keypoints, keypoint_scores = self.decoder.decode(*pose_res[0])
-                keypoints = keypoints[0]
-                keypoint_scores = keypoint_scores[0]
-                
-                # Extract keypoints
-                if len(pose_res) > 0:
-                    # Scale keypoints back to original image coordinates
-                    scale_x = (x2 - x1) / 192
-                    scale_y = (y2 - y1) / 256
-                    keypoints[:, 0] = keypoints[:, 0] * scale_x + x1
-                    keypoints[:, 1] = keypoints[:, 1] * scale_y + y1
-                    
-                    # Calculate centroid from valid keypoints
-                    valid_mask = keypoint_scores > 0.1
-                    if np.any(valid_mask):
-                        #centroid = np.mean(keypoints[valid_mask], axis=0)
-                        detections.append({
-                            'centroid': [(x1+x2)/2,(y1+y2)/2],#centroid,
-                            'keypoints': keypoints,
-                            'keypoint_scores': keypoint_scores,
-                            'bbox': [[x1, y1, x2, y2]]
-                        })
-        tracked_objects = self.tracker.update(detections)
-        return tracked_objects
-    
-    def process_frame(self, frame):
-        """Process a single frame and return results"""
-        return self.process_frame_pytorch(frame)
     
     def draw_pose(self, frame, keypoints, keypoint_scores, track_id=None, color=(0, 255, 0)):
         """Draw pose on frame"""

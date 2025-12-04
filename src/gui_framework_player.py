@@ -15,7 +15,10 @@ Features:
 - Frame jumping
 - Backend switching without code changes
 """
-
+#munkres==1.1.4
+#numpy==1.26.3insta
+#xtcocotools==1.14.3
+# opencv-python-headless 4.12.0.88
 import sys
 import cv2
 import time
@@ -28,7 +31,7 @@ from rtmpose_tracker import RTMPoseTracker
 DISPLAY_W, DISPLAY_H = 640, 480
 
 class VideoFlowPlayer:
-    def __init__(self, backend='tkinter'):
+    def __init__(self, backend='pyqt5', tracker=None):
         self.gui = GUIFramework(backend=backend)
         self.backend_name = backend
         
@@ -47,12 +50,7 @@ class VideoFlowPlayer:
         self.perf_info = {}
         self.perf_keys = ['frame', 'flow', 'gui']
         
-        # Initialize tracker
-        self.tracker = RTMPoseTracker(
-            model_alias='human',
-            device='cpu',
-            conf_threshold=0.3
-        )
+        self.tracker = tracker
         self.colors = [
         (0, 255, 0), (255, 0, 0), (0, 0, 255), (255, 255, 0),
         (255, 0, 255), (0, 255, 255), (128, 255, 0), (255, 128, 0)
@@ -459,10 +457,8 @@ class VideoFlowPlayer:
         while True:
             self.calculate_performance('flow')
             self.perf_info['flow']['init_time'] = time.time()
-            print("Waiting for previous frame...")
             if self.prev_gray is None:
                 self.prev_gray = self.gray.copy()
-            print("Computing optical flow...")
             with threading.Lock():
                 frame_bgr = self.frame_bgr.copy()
                 gray      = self.gray.copy()
@@ -585,7 +581,7 @@ class VideoFlowPlayer:
 def main():
     """Main function with backend selection and error handling"""
     # Default backend
-    backend = 'tkinter'
+    backend = 'pyqt5'#'tkinter'
     
     # Parse command line argument
     if len(sys.argv) > 1:
@@ -604,60 +600,30 @@ def main():
     # Check dependencies
     missing_deps = []
     
-    try:
-        import cv2
-    except ImportError:
-        missing_deps.append("opencv-python (cv2)")
-    
-    try:
-        import numpy
-    except ImportError:
-        missing_deps.append("numpy")
+    import cv2
+    import numpy
     
     if backend == 'tkinter':
-        try:
-            import tkinter
-            from PIL import Image, ImageTk
-        except ImportError as e:
-            if "tkinter" in str(e):
-                missing_deps.append("tkinter (usually included with Python)")
-            else:
-                missing_deps.append("Pillow (PIL)")
+        import tkinter
+        from PIL import Image, ImageTk
     
     elif backend == 'pyqt5':
-        try:
-            from PyQt5.QtWidgets import QApplication
-        except ImportError:
-            missing_deps.append("PyQt5")
+        from PyQt5.QtWidgets import QApplication
     
-    if missing_deps:
-        print("Error: Missing required dependencies:")
-        for dep in missing_deps:
-            print(f"  - {dep}")
-        print("\nInstall missing packages:")
-        for dep in missing_deps:
-            if "opencv" in dep:
-                print("  pip install opencv-python")
-            elif "numpy" in dep:
-                print("  pip install numpy")
-            elif "Pillow" in dep:
-                print("  pip install Pillow")
-            elif "PyQt5" in dep:
-                print("  pip install PyQt5")
-        sys.exit(1)
+    # Initialize tracker
+    tracker = RTMPoseTracker(
+        model_alias='human',
+        device='cpu',
+        conf_threshold=0.3,
+        use_onnx_det=False,
+        use_onnx_pose=True,
+        det_onnx_path='./model_det.onnx',
+        pose_onnx_path='./model_pose.onnx'
+        )
     
     # Create and run application
-    try:
-        player = VideoFlowPlayer(backend=backend)
-        player.run()
-    except KeyboardInterrupt:
-        print("\nApplication interrupted by user")
-    except Exception as e:
-        print(f"Error running application: {e}")
-        import traceback
-        traceback.print_exc()
-    finally:
-        print("Application closed")
-
+    player = VideoFlowPlayer(backend=backend, tracker=tracker)
+    player.run()
+    
 if __name__ == "__main__":
     main()
