@@ -19,8 +19,9 @@ from abc import ABC, abstractmethod
 from enum import Enum
 
 class GUIBackend(Enum):
-    TKINTER = "tkinter"
-    PYQT5 = "pyqt5"
+    TKINTER = "tk"
+    PYQT5 = "qt"
+    WXPYTHON = "wx"
 
 class AbstractGUIBackend(ABC):
     """Abstract base class for GUI backends"""
@@ -346,15 +347,196 @@ class PyQt5Backend(AbstractGUIBackend):
             self.window.close()
         self.app.quit()
 
+class WxPythonBackend(AbstractGUIBackend):
+    """wxPython implementation of GUI backend"""
+    
+    def __init__(self):
+        import wx
+        
+        self.wx = wx
+        
+        # Initialize wxApp if not exists
+        if not wx.App.Get():
+            self.app = wx.App(False)
+        else:
+            self.app = wx.App.Get()
+            
+        self.window = None
+        self.timer = None
+        self.radio_groups = {}
+    
+    def create_window(self, title, width, height):
+        self.window = self.wx.Frame(None, title=title, size=(width, height))
+        # Create main panel
+        self.main_panel = self.wx.Panel(self.window)
+        return self.main_panel
+    
+    def create_button(self, parent, text, callback, x=None, y=None):
+        btn = self.wx.Button(parent, label=text)
+        btn.Bind(self.wx.EVT_BUTTON, lambda evt: callback())
+        
+        if x is not None and y is not None:
+            btn.SetPosition((x, y))
+        
+        return btn
+    
+    def create_label(self, parent, text="", x=None, y=None, width=None, height=None):
+        # Create StaticBitmap for image display (when width and height specified and no text)
+        if width and height and not text:
+            # Create a blank bitmap for image display
+            bitmap = self.wx.Bitmap(width, height)
+            label = self.wx.StaticBitmap(parent, bitmap=bitmap, size=(width, height))
+        elif width and height:
+            label = self.wx.StaticText(parent, label=text, size=(width, height))
+        else:
+            label = self.wx.StaticText(parent, label=text)
+        
+        if x is not None and y is not None:
+            label.SetPosition((x, y))
+        
+        return label
+    
+    def create_radiobutton(self, parent, text, group, value, callback=None):
+        # Create radio button group if it doesn't exist
+        if group not in self.radio_groups:
+            self.radio_groups[group] = {
+                'buttons': [],
+                'group': self.wx.RadioButton(parent, label=text, style=self.wx.RB_GROUP),
+                'callback': callback,
+                'values': {}
+            }
+            radio = self.radio_groups[group]['group']
+            self.radio_groups[group]['buttons'].append(radio)
+            self.radio_groups[group]['values'][radio] = value
+        else:
+            radio = self.wx.RadioButton(parent, label=text)
+            self.radio_groups[group]['buttons'].append(radio)
+            self.radio_groups[group]['values'][radio] = value
+        
+        if callback:
+            def on_select(event):
+                if radio.GetValue():
+                    callback(value)
+            radio.Bind(self.wx.EVT_RADIOBUTTON, on_select)
+        
+        return radio
+    
+    def create_frame(self, parent, x=None, y=None, width=None, height=None):
+        if width and height:
+            frame = self.wx.Panel(parent, size=(width, height))
+        else:
+            frame = self.wx.Panel(parent)
+        
+        if x is not None and y is not None:
+            frame.SetPosition((x, y))
+        
+        return frame
+    
+    def update_image(self, label, image_array):
+        """Update label with image from numpy array (RGB format expected)"""
+        if image_array is None:
+            return
+        
+        height, width = image_array.shape[:2]
+        
+        # Ensure RGB format
+        if len(image_array.shape) == 2:
+            image_array = cv2.cvtColor(image_array, cv2.COLOR_GRAY2RGB)
+        
+        # Ensure contiguous memory
+        if not image_array.flags['C_CONTIGUOUS']:
+            image_array = np.ascontiguousarray(image_array)
+        
+        # Convert to wx.Image and then wx.Bitmap
+        wx_image = self.wx.Image(width, height, image_array.tobytes())
+        bitmap = self.wx.Bitmap(wx_image)
+        
+        # Update the label (assuming it's a StaticBitmap)
+        if isinstance(label, self.wx.StaticBitmap):
+            label.SetBitmap(bitmap)
+            label.Refresh()  # Force refresh to display the image
+        elif isinstance(label, self.wx.StaticText):
+            # If it's a StaticText, we can't display images directly
+            pass
+    
+    def update_text(self, label, text):
+        """Update label text"""
+        if isinstance(label, self.wx.StaticText):
+            label.SetLabel(text)
+        elif isinstance(label, self.wx.Button):
+            label.SetLabel(text)
+    
+    def start_timer(self, callback, interval):
+        """Start a timer that calls callback every interval milliseconds"""
+        if self.timer:
+            self.timer.Stop()
+        
+        self.timer = self.wx.Timer()
+        self.timer.Bind(self.wx.EVT_TIMER, lambda evt: callback())
+        self.timer.Start(interval)
+    
+    def stop_timer(self):
+        """Stop the timer"""
+        if self.timer:
+            self.timer.Stop()
+    
+    def show_file_dialog(self, filetypes=None):
+        """Show file open dialog"""
+        if filetypes is None:
+            wildcard = "All files (*.*)|*.*"
+        else:
+            # Convert to wx wildcard format
+            wildcards = []
+            for name, pattern in filetypes:
+                # Convert *.ext to proper wildcard
+                wildcards.append(f"{name} ({pattern})|{pattern}")
+            wildcard = "|".join(wildcards)
+        
+        with self.wx.FileDialog(self.window, "Open File", wildcard=wildcard,
+                               style=self.wx.FD_OPEN | self.wx.FD_FILE_MUST_EXIST) as dlg:
+            if dlg.ShowModal() == self.wx.ID_OK:
+                return dlg.GetPath()
+        return None
+    
+    def show_input_dialog(self, title, prompt, min_val=None, max_val=None):
+        """Show input dialog for integer input"""
+        dlg = self.wx.TextEntryDialog(self.window, prompt, title)
+        
+        if dlg.ShowModal() == self.wx.ID_OK:
+            try:
+                value = int(dlg.GetValue())
+                if min_val is not None and value < min_val:
+                    return None
+                if max_val is not None and value > max_val:
+                    return None
+                return value
+            except ValueError:
+                return None
+        
+        dlg.Destroy()
+        return None
+    
+    def run(self):
+        """Start the GUI event loop"""
+        if self.window:
+            self.window.Show()
+        self.app.MainLoop()
+    
+    def quit(self):
+        """Quit the application"""
+        if self.window:
+            self.window.Close()
+        self.app.ExitMainLoop()
+
 class GUIFramework:
     """Main GUI Framework class with backend abstraction"""
     
-    def __init__(self, backend='tkinter'):
+    def __init__(self, backend='tk'):
         """
         Initialize GUI Framework with specified backend
         
         Args:
-            backend (str): Either 'tkinter' or 'pyqt5'
+            backend (str): Either 'tk', 'qt', or 'wx' for Tkinter, PyQt5, or WxPython
         """
         self.backend_type = GUIBackend(backend.lower())
         
@@ -362,6 +544,8 @@ class GUIFramework:
             self.backend = TkinterBackend()
         elif self.backend_type == GUIBackend.PYQT5:
             self.backend = PyQt5Backend()
+        elif self.backend_type == GUIBackend.WXPYTHON:
+            self.backend = WxPythonBackend()
         else:
             raise ValueError(f"Unsupported backend: {backend}")
         
@@ -450,7 +634,7 @@ class GUIFramework:
 # Example usage and demonstration
 if __name__ == "__main__":
     # You can switch between backends here
-    BACKEND = 'pyqt5'  # Change to 'tkinter' to use Tkinter
+    BACKEND = 'qt'  # Change to 'tkinter' to use Tkinter
     
     gui = GUIFramework(backend=BACKEND)
     window = gui.create_window(f"Demo App ({BACKEND.upper()})", 400, 300)

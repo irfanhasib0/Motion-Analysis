@@ -4,9 +4,10 @@ Video + Optical Flow Viewer using the flexible GUI Framework
 Equivalent to gui.py and gui_pyqt.py but using the backend-agnostic framework.
 
 Usage:
-    python gui_framework_player.py            # Default to tkinter
+    python gui_framework_player.py            # Default to pyqt5
     python gui_framework_player.py tkinter    # Use Tkinter backend
     python gui_framework_player.py pyqt5      # Use PyQt5 backend
+    python gui_framework_player.py wxpython   # Use wxPython backend
 
 Features:
 - Video playback with play/pause/step controls
@@ -15,14 +16,13 @@ Features:
 - Frame jumping
 - Backend switching without code changes
 """
-#munkres==1.1.4
-#numpy==1.26.3insta
-#xtcocotools==1.14.3
-# opencv-python-headless 4.12.0.88
+
+
 import sys
 import cv2
 import time
 import threading
+import queue
 import numpy as np
 from gui_framework import GUIFramework
 from gui_utils import GUIComponents, ImageProcessor
@@ -56,16 +56,23 @@ class VideoFlowPlayer:
         (255, 0, 255), (0, 255, 255), (128, 255, 0), (255, 128, 0)
         ]
         self.frame_count = 0
+        
+        # Thread-safe queue for frame updates
+        self.frame_queue = queue.Queue(maxsize=2)
 
         # UI state
         self.setup_ui()
-        self.frame_thread = threading.Thread(target=self._update_frame, daemon=True)
-        self.flow_thread = threading.Thread(target=self._compute_optical_flow, daemon=True)
         
+        # Use timer for GUI updates instead of direct calls from worker thread
+        self.gui.start_timer(self._process_frame_queue, 33)  # ~30 FPS GUI updates
+        
+        # Worker thread for inference (to avoid blocking GUI)
+        self.frame_thread = threading.Thread(target=self._update_frame, daemon=True)
+        self.frame_thread.start()
         
         # Performance display labels (will be created in setup_ui)
         self.calculate_performance('frame')
-        self.open_file(path='../../tokyo.mov')
+        self.open_file(path='../tokyo.mov')
     
     def calculate_performance(self,  key):
         """Calculate and update performance metrics using incremental frame counting"""
@@ -116,7 +123,7 @@ class VideoFlowPlayer:
     def setup_ui(self):
         """Setup the user interface"""
         window_width = 1350
-        window_height = 480 + 320 + 40
+        window_height = 480 + 320 + 80
         
         self.window = self.gui.create_window(
             f"Video + Optical Flow Viewer ({self.backend_name.upper()})", 
@@ -283,42 +290,91 @@ class VideoFlowPlayer:
                 self.frame_thread.start()
                 self.flow_thread.start()
         
-        # Update button text - find the play button
-        play_btn = self.gui.get_component("control_buttons_btn_1")  # Play is the second button (index 1)
-        if self.backend_name == 'tkinter':
-            play_btn.config(text="Pause" if self.playing else "Play")
-        else:  # PyQt5
-            play_btn.setText("Pause" if self.playing else "Play")
+        # Update button text using backend-agnostic method
+        play_btn = self.gui.get_component("control_buttons_btn_1")
+        self.gui.update_text("control_buttons_btn_1", "Pause" if self.playing else "Play")
         
         print(f"Playback {'started' if self.playing else 'paused'}")
     
     def _update_frame(self):
+        """Worker thread: Read and process frames, put results in queue"""
         while True:
-            """Update to next frame during playback"""
-            self.calculate_performance('frame')
+            if not self.playing or not self.cap:
+                time.sleep(0.01)
+                continue
+            
             self.perf_info['frame']['init_time'] = time.time()
+            
             # Calculate frame step based on speed
             step = int(self.speed) if self.speed >= 1.0 else 1
             self.frame_idx = min(self.total_frames - 1, self.frame_idx + step)
             
-            # Continue playback or stop at end
-            if self.playing and self.frame_idx < self.total_frames - 1:
-                self.show_frame(self.frame_idx)
-            else:
-                time.sleep(0.01)
+            # Read frame
+            if self.frame_idx >= self.total_frames - 1:
+                self.playing = False
+                continue
+            
+            ret, frame = self.cap.read()
+            if not ret:
+                continue
+            
+            # Process frame (inference happens in worker thread)
+            frame_bgr = frame.copy()
+            pose_viz = self._compute_bbox_pose(frame_bgr.copy())
+            
+            # Prepare display data
+            frame_resized = ImageProcessor.preprocess_for_display(
+                frame_bgr, DISPLAY_W, DISPLAY_H, maintain_aspect=False
+            )
+            flow_resized = ImageProcessor.preprocess_for_display(
+                pose_viz, DISPLAY_W, DISPLAY_H, maintain_aspect=False
+            )
+            
             self.perf_info['frame']['end_time'] = time.time()
             
+            # Put frame data in queue (non-blocking, skip if full)
+            try:
+                self.frame_queue.put_nowait({
+                    'left': frame_resized,
+                    'right': flow_resized,
+                    'idx': self.frame_idx,
+                    'total': self.total_frames,
+                    'mode': self.flow_mode,
+                    'speed': self.speed
+                })
+            except queue.Full:
+                pass  # Skip frame if queue is full
             
+            # Control playback speed
+            time.sleep(max(0.001, 1.0 / (self.fps * self.speed)))
+    
+    def _process_frame_queue(self):
+        """Timer callback on main thread: Update GUI with queued frame data"""
+        try:
+            # Get frame data from queue (non-blocking)
+            frame_data = self.frame_queue.get_nowait()
+            
+            # Update displays (safe on main thread)
+            self.gui.update_image("left_label", frame_data['left'])
+            self.gui.update_image("right_label", frame_data['right'])
+            
+            # Update status
+            status_text = (f"Frame {frame_data['idx']+1}/{frame_data['total']} | "
+                          f"Mode: {frame_data['mode']} | Speed: {frame_data['speed']}x")
+            self.gui.update_text("status_label", status_text)
+            
+            # Update performance
+            self.calculate_performance('frame')
+            
+        except queue.Empty:
+            pass  # No frame available, continue
     
     def _stop_playback(self):
         """Stop playback and update UI"""
         self.playing = False
         
-        play_btn = self.gui.get_component("control_buttons_btn_1")  # Play is the second button (index 1)
-        if self.backend_name == 'tkinter':
-            play_btn.config(text="Play")
-        else:
-            play_btn.setText("Play")
+        # Update button text using backend-agnostic method
+        self.gui.update_text("control_buttons_btn_1", "Play")
     
     def show_frame(self, idx):
         """Display frame and compute optical flow"""
@@ -362,35 +418,35 @@ class VideoFlowPlayer:
 
     def _compute_bbox_pose(self, frame):
         # Process frame
-                tracked_objects = self.tracker.process_frame(frame)
-                
-                # Draw results
-                for track_id, detection in tracked_objects.items():
-                    color = self.colors[track_id % len(self.colors)]
+        tracked_objects = self.tracker.process_frame(frame)
+        
+        # Draw results
+        for track_id, detection in tracked_objects.items():
+            color = self.colors[track_id % len(self.colors)]
+            
+            # Draw bounding box if available
+            if detection.get('bbox') is not None:
+                bboxes = detection['bbox']
+                for bbox in bboxes:
+                    pt1 = (int(bbox[0]), int(bbox[1]))
+                    pt2 = (int(bbox[2]), int(bbox[3]))
+                    cv2.rectangle(frame, pt1, pt2, color, 2)
                     
-                    # Draw bounding box if available
-                    if detection.get('bbox') is not None:
-                        bboxes = detection['bbox']
-                        for bbox in bboxes:
-                            pt1 = (int(bbox[0]), int(bbox[1]))
-                            pt2 = (int(bbox[2]), int(bbox[3]))
-                            cv2.rectangle(frame, pt1, pt2, color, 2)
-                            
-                    # Draw pose
-                    self.tracker.draw_pose(
-                        frame, 
-                        detection['keypoints'],
-                        detection['keypoint_scores'],
-                        track_id,
-                        color
-                    )
-                
-                # Add info text
-                info_text = f"Frame: {self.frame_count} | Objects: {len(tracked_objects)}"
-                cv2.putText(frame, info_text, (10, 30),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-                self.frame_count += 1
-                return frame
+            # Draw pose
+            self.tracker.draw_pose(
+                frame, 
+                detection['keypoints'],
+                detection['keypoint_scores'],
+                track_id,
+                color
+            )
+        
+        # Add info text
+        info_text = f"Frame: {self.frame_count} | Objects: {len(tracked_objects)}"
+        cv2.putText(frame, info_text, (10, 30),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+        self.frame_count += 1
+        return frame
                 
             
     def _compute_dense_flow(self, prev_gray, gray):
@@ -581,15 +637,15 @@ class VideoFlowPlayer:
 def main():
     """Main function with backend selection and error handling"""
     # Default backend
-    backend = 'pyqt5'#'tkinter'
+    backend = 'qt'
     
     # Parse command line argument
     if len(sys.argv) > 1:
         backend = sys.argv[1].lower()
-        if backend not in ['tkinter', 'pyqt5']:
+        if backend not in ['tk', 'qt', 'wx']:
             print(f"Error: Invalid backend '{backend}'")
-            print("Usage: python gui_framework_player.py [tkinter|pyqt5]")
-            print("Supported backends: tkinter, pyqt5")
+            print("Usage: python gui_framework_player.py [tk|qt|wx]")
+            print("Supported backends: tk, qt, wx")
             sys.exit(1)
     
     print("=" * 60)
@@ -603,22 +659,23 @@ def main():
     import cv2
     import numpy
     
-    if backend == 'tkinter':
+    if backend == 'tk':
         import tkinter
         from PIL import Image, ImageTk
     
-    elif backend == 'pyqt5':
+    elif backend == 'qt':
         from PyQt5.QtWidgets import QApplication
+    
+    elif backend == 'wx':
+        import wx
     
     # Initialize tracker
     tracker = RTMPoseTracker(
         model_alias='human',
         device='cpu',
         conf_threshold=0.3,
-        use_onnx_det=False,
-        use_onnx_pose=True,
-        det_onnx_path='./model_det.onnx',
-        pose_onnx_path='./model_pose.onnx'
+        det_fw='trt',
+        pose_fw='trt'
         )
     
     # Create and run application

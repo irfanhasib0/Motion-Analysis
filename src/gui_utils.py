@@ -75,8 +75,10 @@ class GUIComponents:
         """
         group_name = f"{name}_group"
         
-        # Better spacing for different backends
-        if gui.backend_type.value == 'pyqt5':
+        backend = gui.backend_type.value
+        
+        # Handle different backends
+        if backend == 'qt':
             current_x = x
             for i, (text, value) in enumerate(options):
                 radio_name = f"{name}_radio_{i}"
@@ -90,8 +92,22 @@ class GUIComponents:
                 # Set default selection for first option or specified default
                 if (default is None and i == 0) or value == default:
                     radio.setChecked(True)
+        elif backend == 'wx':
+            current_x = x
+            for i, (text, value) in enumerate(options):
+                radio_name = f"{name}_radio_{i}"
+                radio = gui.create_radiobutton(parent, radio_name, text, group_name, value, callback)
+                radio.SetPosition((current_x, y))
+                
+                # Calculate next position with proper spacing
+                radio_width = max(80, len(text) * 8 + 40)  # Account for radio button circle
+                current_x += radio_width
+                
+                # Set default selection for first option or specified default
+                if (default is None and i == 0) or value == default:
+                    radio.SetValue(True)
         else:
-            # Original approach for Tkinter
+            # Tkinter
             for i, (text, value) in enumerate(options):
                 radio_x = x + (i * 80)  # Space buttons 80px apart
                 radio_name = f"{name}_radio_{i}"

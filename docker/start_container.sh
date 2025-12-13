@@ -9,6 +9,7 @@ docker run -d --rm --gpus all \
     -v /home/irfan/Desktop/Data/:/data/ \
     -v /home/irfan/.Xauthority:/root/.Xauthority:rw \
     -v /tmp/.X11-unix:/tmp/.X11-unix \
+    -v /dev/shm:/dev/shm:rw \
     -e DISPLAY=$DISPLAY \
     -e LIBGL_ALWAYS_INDIRECT=1 \
     -e MESA_GL_VERSION_OVERRIDE=3.3 \
