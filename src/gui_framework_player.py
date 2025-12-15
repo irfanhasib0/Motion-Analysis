@@ -17,6 +17,9 @@ Features:
 - Backend switching without code changes
 """
 
+import os
+# Fix Qt plugin path conflict with OpenCV
+#os.environ['QT_QPA_PLATFORM_PLUGIN_PATH'] = ''
 
 import sys
 import cv2
@@ -26,12 +29,12 @@ import queue
 import numpy as np
 from gui_framework import GUIFramework
 from gui_utils import GUIComponents, ImageProcessor
-from rtmpose_tracker import RTMPoseTracker
+from rtmpose_tracker import RTMPoseTracker, MovenetPoseTracker, BlazePoseTracker
 
 DISPLAY_W, DISPLAY_H = 640, 480
 
 class VideoFlowPlayer:
-    def __init__(self, backend='pyqt5', tracker=None):
+    def __init__(self, backend='tk', tracker=None):
         self.gui = GUIFramework(backend=backend)
         self.backend_name = backend
         
@@ -48,7 +51,8 @@ class VideoFlowPlayer:
         
         # Performance tracking
         self.perf_info = {}
-        self.perf_keys = ['frame', 'flow', 'gui']
+        self.perf_keys = ['frame', 'det', 'gui']
+        self.perf_lock = threading.Lock()
         
         self.tracker = tracker
         self.colors = [
@@ -72,37 +76,40 @@ class VideoFlowPlayer:
         
         # Performance display labels (will be created in setup_ui)
         self.calculate_performance('frame')
-        self.open_file(path='../tokyo.mov')
+        self.open_file(path='../../tokyo.mov')
     
     def calculate_performance(self,  key):
         """Calculate and update performance metrics using incremental frame counting"""
         current_time = time.time()
         
-        if key not in self.perf_info:
-            self.perf_info[key] = {
-                'fps': 0.0,
-                'ms': 0.0,
-                'itr': 0.0,
-                'init_time': current_time,
-                'end_time': current_time,
-                'fps_time': current_time
-            }
+        with self.perf_lock:
+            if key not in self.perf_info:
+                self.perf_info[key] = {
+                    'fps': 0.0,
+                    'ms': 0.0,
+                    'itr': 0.0,
+                    'init_time': current_time,
+                    'end_time': current_time,
+                    'fps_time': current_time
+                }
+            
+            self.perf_info[key]['ms']   = (self.perf_info[key]['end_time'] - self.perf_info[key]['init_time']) * 1000.0  # ms
+            self.perf_info[key]['time'] = current_time
+            
+            self.perf_info[key]['itr'] += 1
+            time_elapsed = current_time - self.perf_info[key]['fps_time']
+            if time_elapsed >= 1.0:
+                self.perf_info[key]['fps']  = self.perf_info[key]['itr'] / time_elapsed    
+                self.perf_info[key]['itr'] = 0
+                self.perf_info[key]['fps_time'] = current_time
+            
+            # Copy values for GUI update
+            ms_val = self.perf_info[key]['ms']
+            fps_val = self.perf_info[key]['fps']
         
-        self.perf_info[key]['ms']   = (self.perf_info[key]['end_time'] - self.perf_info[key]['init_time']) * 1000.0  # ms
-        self.perf_info[key]['time'] = current_time
-        
-        self.perf_info[key]['itr'] += 1
-        time_elapsed = current_time - self.perf_info[key]['fps_time']
-        if time_elapsed >= 1.0:
-            self.perf_info[key]['fps']  = self.perf_info[key]['itr'] / time_elapsed    
-            self.perf_info[key]['itr'] = 0
-            self.perf_info[key]['fps_time'] = current_time
-        
-        # Update performance labels
-        self.gui.update_text(
-            key, 
-            f"{key.capitalize()} Update:".ljust(20) + f"{self.perf_info[key]['ms']:.1f}ms ({self.perf_info[key]['fps']:.1f} FPS)"
-        )
+        # Update performance labels (outside lock)
+        text = f"{key.capitalize()} Update:".ljust(20) + f"{ms_val:.1f}ms ({fps_val:.1f} FPS)"
+        self.gui.update_text(key, text)
 
     def _create_performance_display(self, parent):
         """Create performance monitoring labels"""        
@@ -303,7 +310,10 @@ class VideoFlowPlayer:
                 time.sleep(0.01)
                 continue
             
-            self.perf_info['frame']['init_time'] = time.time()
+            with self.perf_lock:
+                if 'frame' not in self.perf_info:
+                    self.perf_info['frame'] = {'init_time': 0, 'end_time': 0, 'fps': 0, 'ms': 0, 'itr': 0, 'fps_time': time.time()}
+                self.perf_info['frame']['init_time'] = time.time()
             
             # Calculate frame step based on speed
             step = int(self.speed) if self.speed >= 1.0 else 1
@@ -330,7 +340,8 @@ class VideoFlowPlayer:
                 pose_viz, DISPLAY_W, DISPLAY_H, maintain_aspect=False
             )
             
-            self.perf_info['frame']['end_time'] = time.time()
+            with self.perf_lock:
+                self.perf_info['frame']['end_time'] = time.time()
             
             # Put frame data in queue (non-blocking, skip if full)
             try:
@@ -417,6 +428,8 @@ class VideoFlowPlayer:
     
 
     def _compute_bbox_pose(self, frame):
+        self.calculate_performance('det')
+        self.perf_info['det']['init_time'] = time.time()
         # Process frame
         tracked_objects = self.tracker.process_frame(frame)
         
@@ -441,11 +454,12 @@ class VideoFlowPlayer:
                 color
             )
         
-        # Add info text
+        # Add info texts
         info_text = f"Frame: {self.frame_count} | Objects: {len(tracked_objects)}"
         cv2.putText(frame, info_text, (10, 30),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
         self.frame_count += 1
+        self.perf_info['det']['end_time'] = time.time()
         return frame
                 
             
@@ -637,7 +651,7 @@ class VideoFlowPlayer:
 def main():
     """Main function with backend selection and error handling"""
     # Default backend
-    backend = 'qt'
+    backend = 'wx'
     
     # Parse command line argument
     if len(sys.argv) > 1:
@@ -668,15 +682,21 @@ def main():
     
     elif backend == 'wx':
         import wx
+        os.environ['GDK_BACKEND'] = 'x11'
+        os.environ['GDK_RENDERING'] = '1'
+        os.environ['GDK_SYNCHRONIZE'] = '1'
+        os.environ['QT_X11_NO_MITSHM'] = '1'
     
     # Initialize tracker
     tracker = RTMPoseTracker(
-        model_alias='human',
         device='cpu',
         conf_threshold=0.3,
         det_fw='trt',
         pose_fw='trt'
         )
+    
+    #tracker = MovenetPoseTracker()
+    #tracker = BlazePoseTracker()
     
     # Create and run application
     player = VideoFlowPlayer(backend=backend, tracker=tracker)

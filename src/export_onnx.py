@@ -30,6 +30,7 @@ def export_tensorrt(onnx_path, engine_path, input_shape, fp16=False, int8=False,
         
         logger = trt.Logger(trt.Logger.INFO)
         builder = trt.Builder(logger)
+        # Always use explicit batch for TensorRT 8.x+
         network = builder.create_network(1 << int(trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH))
         parser = trt.OnnxParser(network, logger)
         
@@ -45,17 +46,22 @@ def export_tensorrt(onnx_path, engine_path, input_shape, fp16=False, int8=False,
         config = builder.create_builder_config()
         config.set_memory_pool_limit(trt.MemoryPoolType.WORKSPACE, 1 << 30)  # 1GB
         
-        # Create optimization profile for dynamic shapes
-        profile = builder.create_optimization_profile()
-        
         # Get input tensor name
         input_name = network.get_input(0).name
         
-        # Set min, optimal, and max shapes for dynamic batch dimension
-        # Format: (batch, channels, height, width)
-        min_shape = (1, *input_shape)
-        opt_shape = (1, *input_shape)
-        max_shape = (max_batch_size, *input_shape)
+        # Create optimization profile
+        profile = builder.create_optimization_profile()
+        
+        if max_batch_size > 1:
+            # Dynamic batch: min=1, opt=1, max=max_batch_size
+            min_shape = (1, *input_shape)
+            opt_shape = (1, *input_shape)
+            max_shape = (max_batch_size, *input_shape)
+        else:
+            # Fixed batch: all shapes are the same
+            min_shape = (1, *input_shape)
+            opt_shape = (1, *input_shape)
+            max_shape = (1, *input_shape)
         
         profile.set_shape(input_name, min_shape, opt_shape, max_shape)
         config.add_optimization_profile(profile)
@@ -95,7 +101,7 @@ if __name__ == "__main__":
             det_checkpoint = torch.load(det_model_path, map_location="cpu")
             model.load_state_dict(det_checkpoint['state_dict'], strict=False)
             model.eval()
-            inp = torch.randn(1, 3, 320, 320)
+            inp = torch.randn(1, 3, 416, 416)
 
         if sys.argv[2] == 'pose':
             register_pose_modules()
@@ -120,9 +126,9 @@ if __name__ == "__main__":
     if mode == 'trt':
         # Define input shapes based on model type
         if sys.argv[2] == 'det':
-            onnx_path = det_model_path.replace('.pth', '.onnx')
+            onnx_path   = det_model_path.replace('.pth', '.onnx')
             engine_path = det_model_path.replace('.pth', '.engine')
-            input_shape = (3, 320, 320)  # Detection model
+            input_shape = (3, 416, 416)  # Detection model
             max_batch_size = 1
         elif sys.argv[2] == 'pose':
             onnx_path = pose_model_path.replace('.pth', '.onnx')

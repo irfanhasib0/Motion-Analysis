@@ -437,6 +437,11 @@ class WxPythonBackend(AbstractGUIBackend):
         if image_array is None:
             return
         
+        # Ensure this runs on the main thread
+        if not self.wx.IsMainThread():
+            self.wx.CallAfter(self.update_image, label, image_array)
+            return
+        
         height, width = image_array.shape[:2]
         
         # Ensure RGB format
@@ -454,13 +459,19 @@ class WxPythonBackend(AbstractGUIBackend):
         # Update the label (assuming it's a StaticBitmap)
         if isinstance(label, self.wx.StaticBitmap):
             label.SetBitmap(bitmap)
-            label.Refresh()  # Force refresh to display the image
+            # Use Update() instead of Refresh() to avoid Pango issues
+            label.Update()
         elif isinstance(label, self.wx.StaticText):
             # If it's a StaticText, we can't display images directly
             pass
     
     def update_text(self, label, text):
         """Update label text"""
+        # Ensure this runs on the main thread
+        if not self.wx.IsMainThread():
+            self.wx.CallAfter(self.update_text, label, text)
+            return
+        
         if isinstance(label, self.wx.StaticText):
             label.SetLabel(text)
         elif isinstance(label, self.wx.Button):
@@ -471,8 +482,9 @@ class WxPythonBackend(AbstractGUIBackend):
         if self.timer:
             self.timer.Stop()
         
-        self.timer = self.wx.Timer()
-        self.timer.Bind(self.wx.EVT_TIMER, lambda evt: callback())
+        # Timer must be owned by the window for proper event handling
+        self.timer = self.wx.Timer(self.window)
+        self.window.Bind(self.wx.EVT_TIMER, lambda evt: callback(), self.timer)
         self.timer.Start(interval)
     
     def stop_timer(self):
