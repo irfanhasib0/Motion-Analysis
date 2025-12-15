@@ -651,7 +651,7 @@ class VideoFlowPlayer:
 def main():
     """Main function with backend selection and error handling"""
     # Default backend
-    backend = 'wx'
+    backend = 'qt'
     
     # Parse command line argument
     if len(sys.argv) > 1:
@@ -679,6 +679,7 @@ def main():
     
     elif backend == 'qt':
         from PyQt5.QtWidgets import QApplication
+        os.environ['QT_QPA_PLATFORM_PLUGIN_PATH'] = '1'
     
     elif backend == 'wx':
         import wx

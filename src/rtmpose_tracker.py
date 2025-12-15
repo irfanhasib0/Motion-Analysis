@@ -282,7 +282,7 @@ class RTMPoseTracker(BasePoseTracker):
     def __init__(self, device='cpu', conf_threshold=0.3, det_fw='torch', pose_fw='torch'):
         super().__init__()
         self.detector = RTMDet(device=device, det_fw=det_fw, conf_threshold=conf_threshold)
-        self.pose_det = RTMPose(device=device, pose_fw=pose_fw, conf_threshold=conf_threshold)
+        self.pose_det = RTMPose(device=device, pose_fw=pose_fw, conf_threshold=conf_threshold/3)
     
     def process_frame(self, frame):
         person_boxes, person_scores =self.detector.detection_inference(frame)
@@ -291,7 +291,7 @@ class RTMPoseTracker(BasePoseTracker):
         return tracked_objects
         
 class RTMPose:
-    def __init__(self, device ='cpu', pose_fw='torch', conf_threshold=0.3):
+    def __init__(self, device ='cuda', pose_fw='torch', input_shape=[256,192], conf_threshold=0.3):
         self.pose_fw = pose_fw
         self.conf_threshold = conf_threshold
         
@@ -302,7 +302,7 @@ class RTMPose:
             self.pose_model = TRTModelPose(pose_weights.replace('.pth', '.engine'), device=device)
 
         elif self.pose_fw == 'torch':
-            self.pose_model = TorchModelPose(pose_model=pose_model, pose_weights=pose_weights, device=device)
+            self.pose_model = TorchModel(model=pose_model, weights=pose_weights, input_shape = input_shape, device=device)
         else:
             raise ValueError(f"Unsupported pose framework: {self.pose_fw}")
         
@@ -310,7 +310,7 @@ class RTMPose:
         
 
         self.decoder = SimCCLabel(
-                    input_size=(256, 192),
+                    input_size=input_shape,
                     sigma=(4.9, 5.66),
                     simcc_split_ratio=2,
                     normalize=False,
@@ -379,7 +379,7 @@ class RTMPose:
         return detections
     
 class RTMDet:
-    def __init__(self, device='cpu', conf_threshold=0.3, det_fw='torch'):
+    def __init__(self, device='cuda', conf_threshold=0.3, input_shape=[416,416], det_fw='torch'):
         """
         Initialize RTMDet detector
         """
@@ -394,7 +394,7 @@ class RTMDet:
             self.det_model = TRTModelDet(det_weights.replace('.pth', '.engine'), device=device)
 
         elif self.det_fw == 'torch':
-            self.det_model = TorchModelDet(det_model=det_model, det_weights=det_weights, device=device)
+            self.det_model = TorchModel(model=det_model, weights=det_weights, input_shape=input_shape, device=device)
         else:
             raise ValueError(f"Unsupported detection framework: {self.det_fw}")
         
@@ -534,7 +534,7 @@ class RTMDet:
         img_shape = torch.tensor(frame_rsz.shape[:2])
 
         frame_rsz = self.preprocess_for_detection(frame_rsz)
-        bbox_preds, class_scores = self.det_model._forward(frame_rsz)        
+        class_scores, bbox_preds = self.det_model._forward(frame_rsz)        
         det_outputs = self.postprocess_for_detection(class_scores, bbox_preds, img_shape.numpy(), ori_shape.numpy(), score_thr=self.conf_threshold)
         
         person_mask   = det_outputs[:,5] == 0
