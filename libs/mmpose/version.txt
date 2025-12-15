@@ -1,2 +1,0 @@
-* (HEAD detached at v1.0.0)
-  main
