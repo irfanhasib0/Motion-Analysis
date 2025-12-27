@@ -79,11 +79,16 @@ def export_tensorrt(onnx_path, engine_path, input_shape, fp16=False, int8=False,
         
         print(f"TensorRT engine saved to {engine_path}")
 
-det_model_path = "../models/rtmdet_tiny_8xb32-300e_coco_20220902_112414-78e30dcc.pth"
-det_cfg_path   = "../configs/openmmlab/configs_det/rtmdet/rtmdet_tiny_8xb32-300e_coco.py"
+#det_model_path = "../models/rtmdet_tiny_8xb32-300e_coco_20220902_112414-78e30dcc.pth"
+#det_cfg_path   = "../configs/openmmlab/configs_det/rtmdet/rtmdet_tiny_8xb32-300e_coco.py"
 
-pose_model_path = "../models/rtmpose-tiny_simcc-coco_pt-aic-coco_420e-256x192-e613ba3f_20230127.pth"
-pose_cfg_path   = "../configs/openmmlab/configs_pose/body_2d_keypoint/rtmpose/coco/rtmpose-t_8xb256-420e_coco-256x192.py"
+#pose_model_path = "../models/rtmpose-tiny_simcc-coco_pt-aic-coco_420e-256x192-e613ba3f_20230127.pth"
+#pose_cfg_path   = "../configs/openmmlab/configs_pose/body_2d_keypoint/rtmpose/coco/rtmpose-t_8xb256-420e_coco-256x192.py"
+
+det_model_path    = "../models/rtmdet_m_8xb32-300e_coco_20220719_112220-229f527c.pth"
+det_cfg_path      = "../configs/openmmlab/configs_det/rtmdet/rtmdet_m_8xb32-300e_coco.py"
+pose_model_path   = "../models/rtmpose-m_simcc-aic-coco_pt-aic-coco_420e-256x192-63eb25f7_20230126.pth"
+pose_cfg_path     = "../configs/openmmlab/configs_pose/body_2d_keypoint/rtmpose/coco/rtmpose-m_8xb256-420e_coco-256x192.py"
 
 # Usage python3 export_onnx.py onnx det
 #       python3 export_onnx.py onnx pose

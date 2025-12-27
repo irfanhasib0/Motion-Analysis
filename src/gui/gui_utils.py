@@ -5,7 +5,7 @@ Provides pre-built components and common patterns.
 
 import cv2
 import numpy as np
-from gui_framework import GUIFramework
+from .gui_framework import GUIFramework
 
 class GUIComponents:
     """Collection of common GUI component builders"""
@@ -45,20 +45,6 @@ class GUIComponents:
         
         return panel
     
-    @staticmethod
-    def create_radio_group(gui, parent, name, x, y, options, default=None, callback=None):
-        """
-        Create a radio button group
-        
-        Args:
-            gui: GUIFramework instance
-            parent: Parent widget
-            name: Group name
-            x, y: Position
-            options: List of (text, value) tuples
-            default: Default selected value
-            callback: Callback function for selection changes
-        """
     @staticmethod
     def create_radio_group(gui, parent, name, x, y, options, default=None, callback=None):
         """

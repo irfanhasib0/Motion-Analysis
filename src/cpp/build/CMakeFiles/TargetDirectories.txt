@@ -1,0 +1,4 @@
+/projects/Motion-Analysis/src/cpp/build/CMakeFiles/OpticalFlowViewer.dir
+/projects/Motion-Analysis/src/cpp/build/CMakeFiles/edit_cache.dir
+/projects/Motion-Analysis/src/cpp/build/CMakeFiles/rebuild_cache.dir
+/projects/Motion-Analysis/src/cpp/build/CMakeFiles/OpticalFlowViewer_autogen.dir

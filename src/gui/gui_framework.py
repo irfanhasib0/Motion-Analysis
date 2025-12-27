@@ -45,6 +45,10 @@ class AbstractGUIBackend(ABC):
     @abstractmethod
     def create_frame(self, parent, x=None, y=None, width=None, height=None):
         pass
+
+    @abstractmethod
+    def create_entry(self, parent, text="", x=None, y=None, width=None):
+        pass
     
     @abstractmethod
     def update_image(self, label, image_array):
@@ -154,6 +158,18 @@ class TkinterBackend(AbstractGUIBackend):
         else:
             frame.pack()
         return frame
+
+    def create_entry(self, parent, text="", x=None, y=None, width=None, height=None):
+        entry = self.tk.Entry(parent)
+        if width:
+            entry.config(width=width)
+        if text:
+            entry.insert(0, text)
+        if x is not None and y is not None:
+            entry.place(x=x, y=y)
+        else:
+            entry.pack()
+        return entry
     
     def update_image(self, label, image_array):
         """Update label with numpy array image (RGB format expected)"""
@@ -169,6 +185,9 @@ class TkinterBackend(AbstractGUIBackend):
     
     def update_text(self, label, text):
         label.config(text=text)
+    
+    def get_text(self, entry):
+        return entry.get()
     
     def start_timer(self, callback, interval):
         if self.timer_id:
@@ -265,6 +284,19 @@ class PyQt5Backend(AbstractGUIBackend):
             label.setFixedSize(width, height)
         return label
     
+    def create_entry(self, parent, text="", x=None, y=None, width=None, height=None):
+        from PyQt5.QtWidgets import QLineEdit
+        entry = QLineEdit(parent)
+        if text:
+            entry.setText(text)
+        if width and height:
+            entry.setFixedSize(width, height)
+        # Set a reasonable minimum height
+        entry.setMinimumHeight(24)
+        if x is not None and y is not None:
+            entry.move(x, y)
+        return entry
+    
     def create_radiobutton(self, parent, text, group, value, callback=None):
         if group not in self.radio_groups:
             self.radio_groups[group] = self.QButtonGroup(parent)
@@ -303,6 +335,9 @@ class PyQt5Backend(AbstractGUIBackend):
     
     def update_text(self, label, text):
         label.setText(text)
+
+    def get_text(self, entry):
+        return entry.text()
     
     def start_timer(self, callback, interval):
         if self.timer is None:
@@ -396,6 +431,20 @@ class WxPythonBackend(AbstractGUIBackend):
         
         return label
     
+    def create_entry(self, parent, text="", x=None, y=None, width=None, height=None):
+        """Create a text entry widget for user input"""
+        if width and height:
+            entry = self.wx.TextCtrl(parent, value=text, size=(width, height))
+        elif width:
+            entry = self.wx.TextCtrl(parent, value=text, size=(width, -1))
+        else:
+            entry = self.wx.TextCtrl(parent, value=text)
+        
+        if x is not None and y is not None:
+            entry.SetPosition((x, y))
+        
+        return entry
+    
     def create_radiobutton(self, parent, text, group, value, callback=None):
         # Create radio button group if it doesn't exist
         if group not in self.radio_groups:
@@ -471,11 +520,14 @@ class WxPythonBackend(AbstractGUIBackend):
         if not self.wx.IsMainThread():
             self.wx.CallAfter(self.update_text, label, text)
             return
-        
-        if isinstance(label, self.wx.StaticText):
+        if isinstance(label, self.wx.StaticText) or isinstance(label, self.wx.Button):
             label.SetLabel(text)
-        elif isinstance(label, self.wx.Button):
-            label.SetLabel(text)
+        elif  isinstance(label, self.wx.TextCtrl):
+            label.SetValue(text)
+
+    def get_text(self, entry):
+        """Get text from entry widget"""
+        return entry.GetValue()
     
     def start_timer(self, callback, interval):
         """Start a timer that calls callback every interval milliseconds"""
@@ -592,6 +644,12 @@ class GUIFramework:
         frame = self.backend.create_frame(parent, x, y, width, height)
         self.components[name] = frame
         return frame
+
+    def create_entry(self, parent, name, text="", x=None, y=None, width=None, height=None):
+        """Create a text entry widget"""
+        entry = self.backend.create_entry(parent, text, x, y, width, height)
+        self.components[name] = entry
+        return entry
     
     def update_image(self, label_name, image_array):
         """Update image in a label widget"""
@@ -602,6 +660,12 @@ class GUIFramework:
         """Update text in a label widget"""
         if label_name in self.components:
             self.backend.update_text(self.components[label_name], text)
+
+    def get_text(self, entry_name):
+        """Get text from an entry widget"""
+        if entry_name in self.components:
+            return self.backend.get_text(self.components[entry_name])
+        return None
     
     def start_timer(self, callback, interval):
         """Start a timer with specified interval (ms)"""
@@ -647,6 +711,9 @@ class GUIFramework:
 if __name__ == "__main__":
     # You can switch between backends here
     BACKEND = 'qt'  # Change to 'tkinter' to use Tkinter
+    if BACKEND == 'qt':
+        import os
+        os.environ['QT_QPA_PLATFORM_PLUGIN_PATH'] = BACKEND
     
     gui = GUIFramework(backend=BACKEND)
     window = gui.create_window(f"Demo App ({BACKEND.upper()})", 400, 300)
@@ -662,8 +729,8 @@ if __name__ == "__main__":
         print(f"Radio changed to: {value}")
         gui.update_text("status_label", f"Selected: {value}")
     
-    gui.create_button(frame, "test_btn", "Click Me", button_clicked, 10, 10)
-    gui.create_label(frame, "title_label", f"GUI Framework Demo - {BACKEND.upper()}", 10, 50)
+    gui.create_button(frame, "test_btn", "Click Me", button_clicked, 10, 30)
+    gui.create_label(frame, "title_label", f"GUI Framework Demo - {BACKEND.upper()}", 10, 60)
     gui.create_radiobutton(frame, "radio1", "Option 1", "group1", "opt1", radio_changed)
     gui.create_radiobutton(frame, "radio2", "Option 2", "group1", "opt2", radio_changed)
     gui.create_label(frame, "status_label", "Ready...", 10, 150)
