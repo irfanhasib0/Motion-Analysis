@@ -2,100 +2,10 @@ import cv2
 import numpy as np
 import threading
 from matplotlib import pyplot as plt
+from scipy.optimize import linear_sum_assignment
 from trackers.trackers import SimpleTracker
-
-class KalmanPoint:
-    """Constant-velocity Kalman filter for 2D points."""
-    def __init__(self, x, y):
-        self.x = np.array([[x], [y], [0.0], [0.0]], dtype=np.float32)  # [x, y, vx, vy]
-        self.P = np.eye(4, dtype=np.float32) * 1e-2
-        self.Q = np.diag([1e-4, 1e-4, 1e-3, 1e-3]).astype(np.float32)
-        self.R_pos = np.diag([1e-2, 1e-2]).astype(np.float32)
-        self.R_vel = np.diag([1e-2, 1e-2]).astype(np.float32)
-        self.H_pos = np.array([[1, 0, 0, 0],
-                               [0, 1, 0, 0]], dtype=np.float32)
-        self.H_vel = np.array([[0, 0, 1, 0],
-                               [0, 0, 0, 1]], dtype=np.float32)
-
-    def _A(self, dt):
-        return np.array([[1, 0, dt, 0],
-                         [0, 1, 0, dt],
-                         [0, 0, 1, 0],
-                         [0, 0, 0, 1]], dtype=np.float32)
-
-    def predict(self, dt=1.0):
-        A = self._A(dt)
-        self.x = A @ self.x
-        self.P = A @ self.P @ A.T + self.Q
-        return self.x
-
-    def update_pos(self, z):
-        z = np.asarray(z, dtype=np.float32).reshape(2, 1)
-        y = z - self.H_pos @ self.x
-        S = self.H_pos @ self.P @ self.H_pos.T + self.R_pos
-        K = self.P @ self.H_pos.T @ np.linalg.inv(S)
-        self.x = self.x + K @ y
-        I = np.eye(4, dtype=np.float32)
-        self.P = (I - K @ self.H_pos) @ self.P
-        return self.x
-
-    # Aliases for compatibility with different calling code
-    def correct(self, z):
-        return self.update_pos(z)
-
-    def update(self, z):
-        return self.update_pos(z)
-
-    def update_vel(self, v):
-        v = np.asarray(v, dtype=np.float32).reshape(2, 1)
-        y = v - self.H_vel @ self.x
-        S = self.H_vel @ self.P @ self.H_vel.T + self.R_vel
-        K = self.P @ self.H_vel.T @ np.linalg.inv(S)
-        self.x = self.x + K @ y
-        I = np.eye(4, dtype=np.float32)
-        self.P = (I - K @ self.H_vel) @ self.P
-        return self.x
-
-class CvKalmanPoint:
-    """OpenCV cv2.KalmanFilter wrapper for constant-velocity 2D points."""
-    def __init__(self, x, y):
-        self.kf = cv2.KalmanFilter(4, 2)
-        self.kf.measurementMatrix = np.array([[1, 0, 0, 0],
-                                              [0, 1, 0, 0]], dtype=np.float32)
-        self.kf.processNoiseCov = np.diag([1e-4, 1e-4, 1e-3, 1e-3]).astype(np.float32)
-        self.kf.measurementNoiseCov = np.diag([1e-2, 1e-2]).astype(np.float32)
-        self.kf.errorCovPost = np.eye(4, dtype=np.float32) * 1e-2
-        self.kf.statePost = np.array([[x], [y], [0.0], [0.0]], dtype=np.float32)
-        self.x = self.kf.statePost.copy()
-
-    def _set_transition(self, dt):
-        self.kf.transitionMatrix = np.array([[1, 0, dt, 0],
-                                             [0, 1, 0, dt],
-                                             [0, 0, 1, 0],
-                                             [0, 0, 0, 1]], dtype=np.float32)
-
-    def predict(self, dt=1.0):
-        self._set_transition(dt)
-        _ = self.kf.predict()
-        self.x = self.kf.statePre.copy()
-        return self.x
-
-    def update_pos(self, z):
-        meas = np.asarray(z, dtype=np.float32).reshape(2, 1)
-        _ = self.kf.correct(meas)
-        self.x = self.kf.statePost.copy()
-        return self.x
-
-    def update_vel(self, v):
-        # Position-only measurement in OpenCV model; ignore explicit velocity updates
-        return self.x
-
-    # Aliases for compatibility with different calling code
-    def correct(self, z):
-        return self.update_pos(z)
-
-    def update(self, z):
-        return self.update_pos(z)
+from collections import deque
+from improc.kalman_filter import KalmanPoint, CvKalmanPoint
 
 class OpticalFlowTracker:
     def __init__(self, flow_mode="sparse", kalman_type="custom"):
@@ -116,13 +26,14 @@ class OpticalFlowTracker:
         self.bgsub    = cv2.createBackgroundSubtractorMOG2(history=500, varThreshold=16, detectShadows=True)
         self.gftt     = cv2.GFTTDetector_create(maxCorners=200, qualityLevel=0.01, minDistance=10, blockSize=10) # 0.01, 7, 7
         self.orb      = cv2.ORB_create(nfeatures=500)
-        self.tracker  = SimpleTracker(max_disappeared=10, max_distance=50)
+        self.tracker  = SimpleTracker(max_disappeared=30, max_distance=100)
         #self.sift     = cv2.SIFT_create(nfeatures=500,  contrastThreshold=0.04, edgeThreshold=10,  sigma=1.6, nOctaveLayers=3, firstOctave=0, scoreType=cv2.SIFT_FAST_SCORE,  patchSize=31, WTA_K=2,  useHarrisDetector=False,  k=0.04, upright=False,  scaleFactor=1.2)
         self.flow_params = dict(winSize=(15, 15), 
                                 maxLevel=2,
                                 criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 10, 0.03))
         self.kalmans = None
         self.kalman_type = kalman_type  # "custom" or "opencv"
+        self.keypoint_queue = deque(maxlen=5)
 
     def _compute_dense_flow(self, prev_gray, gray):
             """Compute dense optical flow using Farneback method"""
@@ -143,11 +54,11 @@ class OpticalFlowTracker:
             return rgb
     
     def _init_kalmans(self):
-        if self.p0 is not None:
+        if self.prev_pts is not None:
             if self.kalman_type == "opencv":
-                self.kalmans = [CvKalmanPoint(float(pt[0,0]), float(pt[0,1])) for pt in self.p0]
+                self.kalmans = [CvKalmanPoint(float(pt[0,0]), float(pt[0,1])) for pt in self.prev_pts]
             else:
-                self.kalmans = [KalmanPoint(float(pt[0,0]), float(pt[0,1])) for pt in self.p0]
+                self.kalmans = [KalmanPoint(float(pt[0,0]), float(pt[0,1])) for pt in self.prev_pts]
         
     def _update_kalman(self, good_new, good_old, val_pts):
         # Update Kalman filters for valid points
@@ -155,9 +66,9 @@ class OpticalFlowTracker:
         new_kalmans = []
         if self.kalmans is None:
             if self.kalman_type == "opencv":
-                self.kalmans = [CvKalmanPoint(float(pt[0,0]), float(pt[0,1])) for pt in self.p0]
+                self.kalmans = [CvKalmanPoint(float(pt[0,0]), float(pt[0,1])) for pt in self.prev_pts]
             else:
-                self.kalmans = [KalmanPoint(float(pt[0,0]), float(pt[0,1])) for pt in self.p0]
+                self.kalmans = [KalmanPoint(float(pt[0,0]), float(pt[0,1])) for pt in self.prev_pts]
 
         indices = np.where(val_pts)[0]
         for idx_i, i in enumerate(indices):
@@ -202,7 +113,7 @@ class OpticalFlowTracker:
                 _mask = np.zeros_like(fg_mask)
                 _mask[y:y+h, x:x+w] = fg_mask[y:y+h, x:x+w]
                 results.append({'bbox': [x, y, x + w, y + h],
-                                'centroid': [x + w / 2, y + h / 2],
+                                'centroid': [y + h / 2, x + w / 2],
                                 'mask': _mask})
         return results
     
@@ -212,104 +123,152 @@ class OpticalFlowTracker:
         del_idx = []
         for i in range(len(results)):
             mask = results[i]['mask']
-            p0  = self.gftt.detect(_gray, mask=mask)
-            p0  = cv2.KeyPoint_convert(p0)
-            if len(p0) == 0:
+            # Keep GFTT keypoints to access detection scores (kp.response)
+            kps = self.gftt.detect(_gray, mask=mask)
+            pts = cv2.KeyPoint_convert(kps)
+            if len(pts) == 0:
                 del_idx.append(i)
                 continue
-            results[i]['keypoints_1']  = p0.reshape(-1, 1, 2)
+            
+            # First sort by y-coordinate, then by x-coordinate within each row 
+            indices = np.lexsort((pts[:, 0], pts[:, 1]))
+            pts = pts[indices]
+            scores = np.array([kps[j].response for j in indices], dtype=np.float32)
+            
+            # Divide bbox into grid and keep highest confidence point per cell
+            bbox = results[i]['bbox']
+            grid_n, grid_m = 3, 3  # Grid dimensions (rows, cols)
+            w = (bbox[2] - bbox[0]) / grid_m
+            h = (bbox[3] - bbox[1]) / grid_n
+
+            filtered_pts = []
+            filtered_scores = []
+
+            for row in range(grid_n):
+                for col in range(grid_m):
+                    # Define grid cell boundaries
+                    cell_x1 = bbox[0] + col * w
+                    cell_y1 = bbox[1] + row * h
+                    cell_x2 = cell_x1 + w
+                    cell_y2 = cell_y1 + h
+                    
+                    # Find points within this cell
+                    in_cell = (pts[:, 0] >= cell_x1) & (pts[:, 0] < cell_x2) & \
+                              (pts[:, 1] >= cell_y1) & (pts[:, 1] < cell_y2)
+                    
+                    if np.any(in_cell):
+                        # Keep point with highest confidence in this cell
+                        cell_indices = np.where(in_cell)[0]
+                        best_idx = cell_indices[scores[cell_indices].argmax()]
+                        filtered_pts.append(pts[best_idx])
+                        filtered_scores.append(scores[best_idx])
+                    else:
+                        # No point found, use grid centroid
+                        centroid = np.array([cell_x1 + w/2, cell_y1 + h/2])
+                        filtered_pts.append(centroid)
+                        filtered_scores.append(0.0)  # Low confidence for centroid
+
+            pts = np.array(filtered_pts, dtype=np.float32)
+            scores = np.array(filtered_scores, dtype=np.float32)
+
+            results[i]['keypoints_1']  = pts.reshape(-1, 1, 2)
             results[i]['keypoints_2']  = results[i]['keypoints_1'].copy()
+            results[i]['keypoint_scores'] = scores.reshape(-1, 1)  # per-point detection score
         #self.npts = len(p0)
         for i in del_idx:
             del results[i]
-        self.tracker.update(results)
+        results = self.tracker.update(results)
         return results
     
     def match_keypoints_by_distance(self, kp1, kp2, max_distance=25.0):
-        """Match keypoints based on Euclidean distance with a threshold"""
-        if len(kp1) == 0 or len(kp2) == 0:
-            return kp2
-        
-        matched_kp2 = []
-        for i, point1 in enumerate(kp1):
-            best_match_idx = -1
-            best_dist = float('inf')
-            for j, point2 in enumerate(kp2):
-                dist = np.linalg.norm(np.array(point1) - np.array(point2))
-                if dist < best_dist:# and dist < max_distance:
-                    best_dist = dist
-                    best_match_idx = j
-            
-            if best_match_idx >= 0 and best_dist < max_distance:
-                matched_kp2.append(kp2[best_match_idx])
-            else:
-                matched_kp2.append(point1)
-        return np.array(matched_kp2)
+        _kp1 = kp1.reshape(-1, 2)[:,None,:]
+        _kp2 = kp2.reshape(-1, 2)[None,:,:]
+        dists = ((_kp1 - _kp2)**2).sum(axis=2)
+        #idx = dists.argmin(axis=1)
+        #kp2s = kp2[idx]
+        row_ind, col_ind = linear_sum_assignment(dists)
+        kp2s = np.empty_like(kp1)
+        kp2s[row_ind] = kp2[col_ind]
+        return np.nan_to_num(kp2s)
     
     def _compute_sparse_flow(self, frame):
         """Compute sparse optical flow using Lucas-Kanade method"""
         if self.prev_gray is None:
             self.prev_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            self.p0 = self._detect_pts(self.prev_gray)
+            self.prev_pts = self._detect_pts(self.prev_gray)
             #self._init_kalmans()
             return frame
         
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         
-        for i in range(len(self.p0)):
+        for i in self.prev_pts.keys():
             # Calculate optical flow
             p1, st, _ = cv2.calcOpticalFlowPyrLK(self.prev_gray,
                                                 gray,
-                                                self.p0[i]['keypoints_1'], None,
+                                                self.prev_pts[i]['keypoints_1'], None,
                                                 **self.flow_params)
             p0r, _, _ = cv2.calcOpticalFlowPyrLK(gray,
                                                 self.prev_gray,
                                                 p1, None,
                                                 **self.flow_params)
-            d = abs(self.p0[i]['keypoints_1'] - p0r).reshape(-1, 2).max(-1)
+            d = abs(self.prev_pts[i]['keypoints_1'] - p0r).reshape(-1, 2).max(-1)
             good_mask = d < 1.0
-        
-            # Select good points
             val_pts  = (st.flatten() == 1) & good_mask
-            self.p0[i]['keypoints_2'] = p1[val_pts]
-            self.p0[i]['keypoints_1'] = self.p0[i]['keypoints_1'][val_pts]
-            #good_new = self.match_keypoints_by_distance(good_old, good_new, max_distance=5.0)
-            #update_kalman
+            self.prev_pts[i]['keypoints_2'][val_pts] = p1[val_pts]
             #good_new = self._update_kalman(good_new, good_old, val_pts)
-            
-        viz_frame = self._draw_pts_flow(frame)
+        
+        viz_frame = self._draw_pts_flow(frame, self.prev_pts)
 
         self.prev_gray = gray
-        # Use fused positions for next iteration
         if 0:#len(good_new) > int(0.9 * self.npts):
-            self.p0 = good_new.reshape(-1, 1, 2)
+            for i in self.prev_pts.keys():
+                self.prev_pts[i]['keypoints_1'] = self.prev_pts[i]['keypoints_2'].copy()
         else:
             # Fallback to redetection when no valid points
-           self.p0 = self._detect_pts(gray)
-           for i in range(len(self.p0)):
-               self.p0[i]['keypoints_1'] = self.match_keypoints_by_distance(self.p0[i]['keypoints_1'], self.p0[i]['keypoints_2'], max_distance=5.0)
+           curr_pts = self._detect_pts(gray)
+           
+           for i in curr_pts.keys():
+                if i in self.prev_pts.keys() and len(self.prev_pts[i]['keypoints_1']) >= curr_pts[i]['keypoints_1'].shape[0]:
+                    prev_kpts = self.prev_pts[i]['keypoints_2']
+                    self.prev_pts[i] = curr_pts[i]
+                    self.prev_pts[i]['keypoints_1'] = self.match_keypoints_by_distance(prev_kpts, curr_pts[i]['keypoints_1'], max_distance=5.0)
+                    self.prev_pts[i]['keypoints_2'] = self.prev_pts[i]['keypoints_1'].copy()
+                else:
+                    self.prev_pts[i] = curr_pts[i]
+           
+           for i in list(self.prev_pts.keys()):
+               if i not in curr_pts.keys():
+                   del self.prev_pts[i]
+            
+           
         return viz_frame
     
-    def _draw_pts_flow(self, frame):
+    def _draw_pts_flow(self, frame, _pts):
         viz_frame = frame.copy()
-        for i in range(len(self.p0)):
-            good_new = self.p0[i]['keypoints_2']
-            good_old = self.p0[i]['keypoints_1']
+        for i in _pts.keys():
+            good_new = _pts[i]['keypoints_2']
+            good_old = _pts[i]['keypoints_1']
+            
             if self.mask is None:
                 self.mask = np.zeros_like(viz_frame)
-            # Draw tracks
+            else:
+                self.mask = (0.98 * self.mask).astype(np.uint8)
+
             for j, (new, old) in enumerate(zip(good_new, good_old)):
                 a, b = new.ravel().astype(int)
                 c, d = old.ravel().astype(int)
-                # Draw line for trajectory
-                self.mask = cv2.line(self.mask, (a, b), (c, d), self.colors[j % self.n_colors], 1)
-                # Draw point``
-                viz_frame = cv2.circle(viz_frame, (a, b), 3, self.colors[j % self.n_colors], -1)
-            
-            # Combine visualization
+                try:
+                    self.mask = cv2.line(self.mask, (a, b), (c, d), self.colors[j % self.n_colors], 2)
+                    viz_frame = cv2.circle(viz_frame, (a, b), 3, self.colors[j % self.n_colors], -1)
+                except:
+                    print(a,b,c,d)
+                    
             viz_frame = cv2.add(viz_frame, self.mask)
-            cv2.rectangle(viz_frame, (int(self.p0[i]['bbox'][0]), int(self.p0[i]['bbox'][1])),
-                        (int(self.p0[i]['bbox'][2]), int(self.p0[i]['bbox'][3])), (0, 255, 0), 2)
+            cv2.rectangle(viz_frame, (int(_pts[i]['bbox'][0]), int(_pts[i]['bbox'][1])),
+                        (int(_pts[i]['bbox'][2]), int(_pts[i]['bbox'][3])), (0, 255, 0), 2)
+            cv2.putText(viz_frame, f'ID: {i}',
+                        (int(_pts[i]['bbox'][0]), int(_pts[i]['bbox'][1]) - 10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
         return viz_frame
     
     def _compute_flann_match(self, desc1, desc2):
