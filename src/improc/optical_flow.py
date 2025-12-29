@@ -99,6 +99,7 @@ class OpticalFlowTracker:
     def _detect_forground_bboxes(self, gray):
         # Apply background subtraction
         fg_mask = self.bgsub.apply(gray)
+        
         # Morphological operations to clean up the mask
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
         fg_mask = cv2.morphologyEx(fg_mask, cv2.MORPH_OPEN, kernel, iterations=2)
@@ -123,6 +124,7 @@ class OpticalFlowTracker:
         del_idx = []
         for i in range(len(results)):
             mask = results[i]['mask']
+
             # Keep GFTT keypoints to access detection scores (kp.response)
             kps = self.gftt.detect(_gray, mask=mask)
             pts = cv2.KeyPoint_convert(kps)
@@ -137,7 +139,7 @@ class OpticalFlowTracker:
             
             # Divide bbox into grid and keep highest confidence point per cell
             bbox = results[i]['bbox']
-            grid_n, grid_m = 3, 3  # Grid dimensions (rows, cols)
+            grid_n, grid_m = 3, 2  # Grid dimensions (rows, cols)
             w = (bbox[2] - bbox[0]) / grid_m
             h = (bbox[3] - bbox[1]) / grid_n
 
@@ -162,8 +164,13 @@ class OpticalFlowTracker:
                         best_idx = cell_indices[scores[cell_indices].argmax()]
                         filtered_pts.append(pts[best_idx])
                         filtered_scores.append(scores[best_idx])
+                    elif self.prev_pts is not None and i in self.prev_pts.keys():
+                        # Use previous frame's point if available             
+                        pt = self.prev_pts[i]['keypoints_2'][row * grid_m + col][0]
+                        filtered_pts.append(pt)
+                        filtered_scores.append(0.0)  # Low confidence for centroid
                     else:
-                        # No point found, use grid centroid
+                        # If no point in this cell, use cell center as fallback
                         centroid = np.array([cell_x1 + w/2, cell_y1 + h/2])
                         filtered_pts.append(centroid)
                         filtered_scores.append(0.0)  # Low confidence for centroid
@@ -174,21 +181,36 @@ class OpticalFlowTracker:
             results[i]['keypoints_1']  = pts.reshape(-1, 1, 2)
             results[i]['keypoints_2']  = results[i]['keypoints_1'].copy()
             results[i]['keypoint_scores'] = scores.reshape(-1, 1)  # per-point detection score
-        #self.npts = len(p0)
+
+        del_idx = sorted(del_idx, reverse=True)
         for i in del_idx:
             del results[i]
         results = self.tracker.update(results)
         return results
     
-    def match_keypoints_by_distance(self, kp1, kp2, max_distance=25.0):
-        _kp1 = kp1.reshape(-1, 2)[:,None,:]
-        _kp2 = kp2.reshape(-1, 2)[None,:,:]
-        dists = ((_kp1 - _kp2)**2).sum(axis=2)
-        #idx = dists.argmin(axis=1)
-        #kp2s = kp2[idx]
-        row_ind, col_ind = linear_sum_assignment(dists)
-        kp2s = np.empty_like(kp1)
-        kp2s[row_ind] = kp2[col_ind]
+    def match_keypoints_by_distance(self, kp1, kp2, matcher='hungarian'):
+        # Handle empty inputs gracefully
+        if kp1 is None or kp2 is None:
+            return kp1 if kp2 is None else kp2
+        if kp1.size == 0:
+            return kp2
+        if kp2.size == 0:
+            return kp1
+
+        _kp1 = kp1.reshape(-1, 2)[:, None, :]
+        _kp2 = kp2.reshape(-1, 2)[None, :, :]
+        dists = ((_kp1 - _kp2) ** 2).sum(axis=2).astype(np.float64)
+        # Sanitize cost matrix to avoid infeasible assignment (NaN/Inf -> large cost)
+        dists = np.nan_to_num(dists, nan=1e9, posinf=1e9, neginf=1e9)
+        if matcher == 'hungarian':
+            kp2s = np.empty_like(kp1)
+            row_ind, col_ind = linear_sum_assignment(dists)
+            kp2s[row_ind] = kp2[col_ind]
+        else:
+            # Fallback: greedy nearest neighbor
+            idx = np.argmin(dists, axis=1)
+            kp2s = kp2[idx]
+            
         return np.nan_to_num(kp2s)
     
     def _compute_sparse_flow(self, frame):
@@ -211,36 +233,29 @@ class OpticalFlowTracker:
                                                 self.prev_gray,
                                                 p1, None,
                                                 **self.flow_params)
-            d = abs(self.prev_pts[i]['keypoints_1'] - p0r).reshape(-1, 2).max(-1)
-            good_mask = d < 1.0
-            val_pts  = (st.flatten() == 1) & good_mask
+            d = abs(self.prev_pts[i]['keypoints_1'] - p0r)
+            good_mask = d.reshape(-1, 2).max(-1) < 1.0
+            val_pts   = (st.flatten() == 1) & good_mask
             self.prev_pts[i]['keypoints_2'][val_pts] = p1[val_pts]
             #good_new = self._update_kalman(good_new, good_old, val_pts)
-        
-        viz_frame = self._draw_pts_flow(frame, self.prev_pts)
-
-        self.prev_gray = gray
-        if 0:#len(good_new) > int(0.9 * self.npts):
-            for i in self.prev_pts.keys():
-                self.prev_pts[i]['keypoints_1'] = self.prev_pts[i]['keypoints_2'].copy()
-        else:
-            # Fallback to redetection when no valid points
-           curr_pts = self._detect_pts(gray)
-           
-           for i in curr_pts.keys():
-                if i in self.prev_pts.keys() and len(self.prev_pts[i]['keypoints_1']) >= curr_pts[i]['keypoints_1'].shape[0]:
-                    prev_kpts = self.prev_pts[i]['keypoints_2']
-                    self.prev_pts[i] = curr_pts[i]
-                    self.prev_pts[i]['keypoints_1'] = self.match_keypoints_by_distance(prev_kpts, curr_pts[i]['keypoints_1'], max_distance=5.0)
-                    self.prev_pts[i]['keypoints_2'] = self.prev_pts[i]['keypoints_1'].copy()
-                else:
-                    self.prev_pts[i] = curr_pts[i]
-           
-           for i in list(self.prev_pts.keys()):
-               if i not in curr_pts.keys():
-                   del self.prev_pts[i]
             
-           
+        viz_frame = self._draw_pts_flow(frame, self.prev_pts)
+        self.prev_gray = gray
+        curr_pts = self._detect_pts(gray)
+        
+        for i in curr_pts.keys():
+            if i in self.prev_pts.keys() and len(self.prev_pts[i]['keypoints_1']) >= curr_pts[i]['keypoints_1'].shape[0]:
+                prev_kpts = self.prev_pts[i]['keypoints_2']
+                self.prev_pts[i] = curr_pts[i]
+                self.prev_pts[i]['keypoints_1'] = self.match_keypoints_by_distance(prev_kpts, curr_pts[i]['keypoints_1'])
+                self.prev_pts[i]['keypoints_2'] = self.prev_pts[i]['keypoints_1'].copy()
+            else:
+                self.prev_pts[i] = curr_pts[i]
+        
+        for i in list(self.prev_pts.keys()):
+            if i not in curr_pts.keys():
+                del self.prev_pts[i]
+
         return viz_frame
     
     def _draw_pts_flow(self, frame, _pts):
@@ -257,6 +272,8 @@ class OpticalFlowTracker:
             for j, (new, old) in enumerate(zip(good_new, good_old)):
                 a, b = new.ravel().astype(int)
                 c, d = old.ravel().astype(int)
+                if min(a,b,c,d) < 0:
+                    continue
                 try:
                     self.mask = cv2.line(self.mask, (a, b), (c, d), self.colors[j % self.n_colors], 2)
                     viz_frame = cv2.circle(viz_frame, (a, b), 3, self.colors[j % self.n_colors], -1)

@@ -136,7 +136,7 @@ class ImageProcessor:
     """Common image processing utilities for GUI applications"""
     
     @staticmethod
-    def preprocess_for_display(image, target_width, target_height, maintain_aspect=True):
+    def preprocess_for_display(image, target_width, target_height, maintain_aspect=False):
         """
         Preprocess image for GUI display
         

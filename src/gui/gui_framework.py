@@ -190,9 +190,16 @@ class TkinterBackend(AbstractGUIBackend):
         return entry.get()
     
     def start_timer(self, callback, interval):
+        # Tkinter's after is one-shot; wrap to make it repeating
         if self.timer_id:
             self.root.after_cancel(self.timer_id)
-        self.timer_id = self.root.after(interval, callback)
+        def _tick():
+            try:
+                callback()
+            finally:
+                # Reschedule for continuous updates
+                self.timer_id = self.root.after(interval, _tick)
+        self.timer_id = self.root.after(interval, _tick)
     
     def stop_timer(self):
         if self.timer_id:
