@@ -1,0 +1,30 @@
+version: '3.8'
+
+services:
+  nvr-server:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./recordings:/app/recordings
+      - ./logs:/app/logs
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8000
+      - RECORDINGS_DIR=/app/recordings
+    restart: unless-stopped
+    
+  # Optional: Add a database service
+  # postgres:
+  #   image: postgres:15
+  #   environment:
+  #     POSTGRES_DB: nvr
+  #     POSTGRES_USER: nvr
+  #     POSTGRES_PASSWORD: nvr_password
+  #   volumes:
+  #     - postgres_data:/var/lib/postgresql/data
+  #   ports:
+  #     - "5432:5432"
+
+# volumes:
+#   postgres_data:
