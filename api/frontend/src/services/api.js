@@ -2,7 +2,7 @@ import axios from 'axios';
 
 const API_BASE_URL = process.env.NODE_ENV === 'production' 
   ? window.location.origin 
-  : 'http://localhost:8000';
+  : 'http://localhost:9001';
 
 const apiClient = axios.create({
   baseURL: `${API_BASE_URL}/api`,
@@ -37,9 +37,14 @@ export const api = {
   createCamera: (camera) => apiClient.post('/cameras', camera),
   updateCamera: (cameraId, updates) => apiClient.put(`/cameras/${cameraId}`, updates),
   deleteCamera: (cameraId) => apiClient.delete(`/cameras/${cameraId}`),
+  startCamera: (cameraId) => apiClient.post(`/cameras/${cameraId}/start`),
+  stopCamera: (cameraId) => apiClient.post(`/cameras/${cameraId}/stop`),
   
   // Recording endpoints
-  startRecording: (cameraId) => apiClient.post(`/cameras/${cameraId}/start-recording`),
+  startRecording: (cameraId) => {
+    console.log('API startRecording called for camera:', cameraId);
+    return apiClient.post(`/cameras/${cameraId}/start-recording`);
+  },
   stopRecording: (cameraId) => apiClient.post(`/cameras/${cameraId}/stop-recording`),
   getRecordings: (cameraId = null) => {
     const params = cameraId ? { camera_id: cameraId } : {};
@@ -52,8 +57,8 @@ export const api = {
   
   // Streaming endpoints
   getCameraStreamUrl: (cameraId) => `${API_BASE_URL}/api/cameras/${cameraId}/stream`,
+  closeCameraStream: (cameraId) => apiClient.post(`/cameras/${cameraId}/stream/close`),
   getRecordingStreamUrl: (recordingId) => `${API_BASE_URL}/api/recordings/${recordingId}/stream`,
-  
   // Processing endpoints
   getProcessingTypes: () => apiClient.get('/processing/types'),
   startProcessing: (cameraId, processorType, params = {}) => 

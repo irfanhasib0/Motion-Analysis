@@ -1,6 +1,51 @@
 import cv2
 import numpy as np
 
+'''
+def _init_kalmans(self):
+        if self.prev_pts is not None:
+            if self.kalman_type == "opencv":
+                self.kalmans = [CvKalmanPoint(float(pt[0,0]), float(pt[0,1])) for pt in self.prev_pts]
+            else:
+                self.kalmans = [KalmanPoint(float(pt[0,0]), float(pt[0,1])) for pt in self.prev_pts]
+        
+    def _update_kalman(self, good_new, good_old, val_pts):
+        # Update Kalman filters for valid points
+        fused_positions = []
+        new_kalmans = []
+        if self.kalmans is None:
+            if self.kalman_type == "opencv":
+                self.kalmans = [CvKalmanPoint(float(pt[0,0]), float(pt[0,1])) for pt in self.prev_pts]
+            else:
+                self.kalmans = [KalmanPoint(float(pt[0,0]), float(pt[0,1])) for pt in self.prev_pts]
+
+        indices = np.where(val_pts)[0]
+        for idx_i, i in enumerate(indices):
+            if self.kalman_type == "opencv":
+                kf = self.kalmans[i] if i < len(self.kalmans) else CvKalmanPoint(float(good_old[idx_i][0]), float(good_old[idx_i][1]))
+            else:
+                kf = self.kalmans[i] if i < len(self.kalmans) else KalmanPoint(float(good_old[idx_i][0]), float(good_old[idx_i][1]))
+            # Predict
+            kf.predict(dt=1.0)
+            # Update with LK position using available API
+            meas_pos = good_new[idx_i]
+            if hasattr(kf, 'update_pos'):
+                kf.update_pos(meas_pos)
+            elif hasattr(kf, 'correct'):
+                kf.correct(meas_pos)
+            else:
+                kf.update(meas_pos)
+            # Optional velocity update only for custom filter
+            if self.kalman_type != "opencv":
+                disp = good_new[idx_i] - good_old[idx_i]
+                kf.update_vel(disp)
+            #fused_positions.append([float(kf.x[0,0]), float(kf.x[1,0])])
+            good_new[idx_i] = [kf.x[0,0], kf.x[1,0]]
+            new_kalmans.append(kf)
+        self.kalmans = new_kalmans
+        return good_new
+'''
+
 class KalmanPoint:
     """Constant-velocity Kalman filter for 2D points."""
     def __init__(self, x, y):

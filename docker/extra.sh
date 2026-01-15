@@ -22,9 +22,12 @@ pip install cython_bbox==0.1.5
 pip install faster_coco_eval==1.7.0
 pip install calflops==0.3.2
 pip install onnxsim==0.4.36
+pip install pyside6
 apt update
 apt install -y qtbase5-dev
 #apt install -y libopencv-dev
 apt install -y libgtk-3-dev
 apt install -y python3-wxgtk4.0
 #apt install -y protobuf-compiler
+apt install -y libopencv-dev
+apt install -y libxcb-cursor0

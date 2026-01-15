@@ -1,10 +1,13 @@
 import sys
 import numpy as np
 
-sys.path.insert(0,'../libs/ByteTrack')
-from yolox.tracker.byte_tracker import BYTETracker, STrack
-from yolox.tracker.basetrack import BaseTrack, TrackState
-
+try:
+    sys.path.insert(0,'../libs/ByteTrack')
+    from yolox.tracker.byte_tracker import BYTETracker, STrack
+    from yolox.tracker.basetrack import BaseTrack, TrackState
+except:
+    print("ByteTrack not found. Please ensure ByteTrack is installed and accessible.")
+    
 class SimpleTracker:
     """Simple tracking based on position similarity"""
     

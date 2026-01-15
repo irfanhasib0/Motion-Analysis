@@ -17,6 +17,7 @@ Features:
 - Backend switching without code changes
 """
 
+import io
 import os
 # Fix Qt plugin path conflict with OpenCV
 #os.environ['QT_QPA_PLATFORM_PLUGIN_PATH'] = ''
@@ -26,22 +27,50 @@ import cv2
 import time
 import threading
 import queue
+import glob
 import numpy as np
 from gui.gui_framework import GUIFramework
 from gui.gui_utils import GUIComponents, ImageProcessor
 #from trackers.pose_tracker import RTMPoseTracker
 from improc.optical_flow import OpticalFlowTracker
+import cProfile, pstats, io
 
-DISPLAY_W, DISPLAY_H = 640, 480
+DISPLAY_W, DISPLAY_H = 320, 240
+CTRL_H = 320
+
+sys.path.append('../cpp/build')
+sys.path.append('../cpp/gui/build')
+USE_CPP_GUI = False
+#try:
+#import gui_framework_cpp as gfc
+# C++ equivalents
+
+USE_CPP_GUI = False
+if USE_CPP_GUI:
+    print("Using C++ GUI Framework")
+    from gui_framework_cpp import GUIFrameworkCpp as GUIFrameworkCpp
+    from gui_framework_cpp import GUIComponents as GUIComponents
+    from gui_framework_cpp import ImageProcessor as ImageProcessor
+    print("Imported C++ GUI Framework modules")
+
+#ipcam = "rtsp://admin:L2D841A1@192.168.0.102:554/cam/realmonitor?channel=1&subtype=0&unicast=true&proto=Onvif
+
+import motionflow_cpp
 
 class GUI:
     def __init__(self, backend='tk'):
-        self.gui = GUIFramework(backend=backend)
+        if backend == 'qt' and USE_CPP_GUI:
+            # Use C++ Qt GUI framework for Qt backend
+            print("Initializing C++ Qt GUI Framework")
+            self.gui = GUIFrameworkCpp()
+            print("Using C++ Qt GUI Framework")
+        else:
+            self.gui = GUIFramework(backend=backend)
         self.perf_keys = ['frame', 'det', 'gui']
         self.info_keys = ['frame_idx']
 
-        self.window_width = 1350
-        self.window_height = 480 + 320 + 80
+        self.window_width  = 4* DISPLAY_W + 100
+        self.window_height = CTRL_H + DISPLAY_H + 80
 
     def setup_ui(self):
         """Setup the user interface"""
@@ -157,27 +186,23 @@ class GUI:
             flow_options, "dense", self.set_flow_mode
         )
     
-    def _create_video_displays(self, parent):
-        """Create video display labels"""
-        # Left display - original video
-        self.gui.create_label(
-            parent, "left_title", "Original Video", 
-            10, 5
-        )
-        self.gui.create_label(
-            parent, "left_label", "", 
-            10, 25, DISPLAY_W, DISPLAY_H
-        )
-        
-        # Right display - optical flow
-        self.gui.create_label(
-            parent, "right_title", "Optical Flow", 
-            30 + DISPLAY_W, 5
-        )
-        self.gui.create_label(
-            parent, "right_label", "", 
-            30 + DISPLAY_W, 25, DISPLAY_W, DISPLAY_H
-        )
+    def _create_video_displays(self, parent, wpad = 20, hpad = 20):
+        """Create video display areas"""
+        x , y = wpad, hpad
+        for i in range(4):
+            self.gui.create_label(
+                parent, f"title_frame_{i+1}", 
+                f"Disp_{i+1}", 
+                x, y - 15
+            )
+            self.gui.create_label(
+                parent, f"frame_{i+1}", "", 
+                x, y, 
+                DISPLAY_W + x, DISPLAY_H + y
+            )
+            x += DISPLAY_W + wpad
+
+
 
 class VideoFlowPlayer(GUI):
     def __init__(self, backend='tk', tracker=None):
@@ -191,10 +216,12 @@ class VideoFlowPlayer(GUI):
         self.frame_idx = 0
         self.playing = False
         self.speed = 8.0
-        self.prev_gray = None
-        self.flow_vis  = None
-        self.flow_mode = "dense"
-        self.empty_frame = np.zeros((480, 640, 3), dtype=np.uint8)
+        self.cap = None
+        self.files = None
+        self.frame_width = DISPLAY_W
+        self.frame_height = DISPLAY_H
+
+        self.empty_frame = np.zeros((self.frame_height, self.frame_width, 3), dtype=np.uint8)
         # Performance tracking
         self.perf_info = {}
         self.perf_lock = threading.Lock()
@@ -203,7 +230,7 @@ class VideoFlowPlayer(GUI):
         
         # Thread-safe queue for frame updates
         self.frame_queue = queue.Queue(maxsize=2)
-
+        self.prof = cProfile.Profile()
         # UI state
         self.setup_ui()
         
@@ -213,13 +240,15 @@ class VideoFlowPlayer(GUI):
         # Worker thread for inference (to avoid blocking GUI)
         self.frame_thread = threading.Thread(target=self._update_frame, daemon=True)
         self.frame_thread.start()
-        self.open_file(path='../../01_001.avi')
+        #self.open_file(path='../../01_001.avi')
+        self.open_file(path='/media/irfan/TRANSCEND/action_data/stech/training/videos/01_001.avi')
+        #self.open_file(path='/media/irfan/TRANSCEND/action_data/aven/training_videos/01.avi')
         self._show_frame()
-        
+        self.prof.enable()
     
     def calculate_performance(self,  key):
-        """Calculate and update performance metrics using incremental frame counting"""
-        current_time = time.time()
+        """Calculate performance metrics using incremental frame counting and optionally update GUI."""
+        current_time = time.perf_counter()
         
         with self.perf_lock:
             if key not in self.perf_info:
@@ -246,13 +275,15 @@ class VideoFlowPlayer(GUI):
             ms_val = self.perf_info[key]['ms']
             fps_val = self.perf_info[key]['fps']
         
-        # Update performance labels (outside lock)
+        # Prepare text for GUI update (outside lock)
         text = f"{key.capitalize()} Update:".ljust(20) + f"{ms_val:.1f}ms ({fps_val:.1f} FPS)"
         self.gui.update_text(key, text)
     
     def _set_initial_flow_mode(self):
         """Set initial flow mode selection"""
-        # Get the first radio button (Dense) and select it
+        # C++ Qt path sets default in GUIComponents; skip manual selection
+        if USE_CPP_GUI and self.backend_name == 'qt':
+            return
         dense_radio = self.gui.get_component("flow_mode_radio_0")
         if dense_radio and self.backend_name == 'tkinter':
             dense_radio.select()
@@ -270,43 +301,87 @@ class VideoFlowPlayer(GUI):
         
     def open_file(self, path=None):
         if path is None or path == False:
+            
             """Open video file dialog"""
             filetypes = [
                 ("Video files", "*.mp4 *.avi *.mov *.mkv"), 
-                ("All files", "*.*")
+                ("All files", "*")
             ]
-            path = self.gui.show_file_dialog(filetypes)
-
-        if path is None:
-            return
+            
+            # Show dialog to choose between file or folder
+            choice = self.gui.show_message_box(
+                "Select Input Type",
+                "Choose input type:",
+                buttons=["Video File", "Image Folder", "Cancel"]
+            )
+            
+            if choice == "Video File":
+                path = self.gui.show_file_dialog(filetypes=filetypes)
+            elif choice == "Image Folder":
+                path = self.gui.show_folder_dialog()
+                if path and not path.endswith('/'):
+                    path += '/'
+            else:
+                return
         
-        self.release_video()
-        print(f"Opening video file: {path}")
-        self.cap = cv2.VideoCapture(path)
-        self.cap.set(cv2.CAP_PROP_FPS, 30)
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-        print(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        print(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        print(self.cap.get(cv2.CAP_PROP_FPS))
+        if path.endswith(('.mp4', '.avi', '.mov', '.mkv')):
+            self.release_video()
+            print(f"Opening video file: {path}")
+            self.cap = cv2.VideoCapture(path)
+            self.cap.set(cv2.CAP_PROP_FPS, 30)
+            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.frame_width)#640)
+            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.frame_height)#480)
+            print(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            print(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            print(self.cap.get(cv2.CAP_PROP_FPS))
 
-        if not self.cap.isOpened():
-            error_msg = f"Failed to open: {path.split('/')[-1]}"
-            self.gui.update_text("status_label", error_msg)
+            if not self.cap.isOpened():
+                error_msg = f"Failed to open: {path.split('/')[-1]}"
+                self.gui.update_text("status_label", error_msg)
+                self.cap = None
+                return
+            
+            # Get video properties
+            self.total_frames = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+            self.fps = float(self.cap.get(cv2.CAP_PROP_FPS) or 25.0)
+            self.files = None
+            print(f"Video opened: {path} | {self.total_frames} frames @ {self.fps:.2f} fps")
+
+            self.tracker.restart()
+
+
+        elif path.endswith('/'):
+            self.files = sorted(glob.glob(os.path.join(path, '*.jpg')))
+            self.annot_files = sorted(glob.glob(os.path.join(path, '*.npy')))
+            self.total_frames = len(self.files)
+            self.fps = 25.0
             self.cap = None
+            print(f"Found {self.total_frames} image files.")
+        else:
+            print(f"Unsupported file type: {path}")
             return
-        
-        # Get video properties
-        self.total_frames = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
-        self.fps = float(self.cap.get(cv2.CAP_PROP_FPS) or 25.0)
+
         self.frame_idx = 0
-        self.prev_gray = None
-        
         # Update status
-        filename = path.split('/')[-1]
+        filename = '/'.join(path.split('/')[-2:])
         status_text = f"Loaded {filename} | {self.total_frames} frames @ {self.fps:.2f} fps"
         self.gui.update_text("status_label", status_text)
-        print(f"Video loaded: {filename}")
+    
+    def read_frame(self):
+        if self.cap is not None:
+            ret, frame = self.cap.read()
+            if not ret:
+                return None
+            return frame
+        elif self.files is not None:
+            if self.frame_idx < len(self.files):
+                frame = cv2.imread(self.files[self.frame_idx])
+                frame = cv2.resize(frame, (self.frame_width, self.frame_height))
+                if len(self.annot_files):
+                    annot = np.load(self.annot_files[self.frame_idx])
+                self.frame_idx += 1
+                return frame
+        return None
     
     def _stop_playback(self):
         """Stop playback and update UI"""
@@ -395,16 +470,17 @@ class VideoFlowPlayer(GUI):
 
     def toggle_play(self):
         """Toggle play/pause"""
-        if not self.cap:
+        if self.cap is None and self.files is None:
             return
         
         if not self.playing:
             self.frame_idx = int(self.gui.get_text('frame_idx'))
             print(f"Playback resumed at frame: {self.frame_idx}")
-            try:
-                self.cap.set(cv2.CAP_PROP_POS_FRAMES, self.frame_idx)
-            except Exception as e:
-                print(f"Error setting frame position: {e}")
+            if self.cap is not None:
+                try:
+                    self.cap.set(cv2.CAP_PROP_POS_FRAMES, self.frame_idx)
+                except Exception as e:
+                    print(f"Error setting frame position: {e}")
 
         self.playing = not self.playing
         if self.playing:
@@ -430,18 +506,17 @@ class VideoFlowPlayer(GUI):
     def _update_frame(self):
         """Worker thread: Read and process frames, put results in queue"""
         while True:
-            self.calculate_performance('det')
-            self.perf_info['det']['init_time'] = time.time()
-            if not self.playing or not self.cap:
+            # Do not update GUI from worker thread; only compute metrics
+            if not self.playing or (self.cap is None and self.files is None):
                 time.sleep(0.01)
-                self.perf_info['det']['end_time'] = time.time()
                 continue
+            self.calculate_performance('det')
+            self.perf_info['det']['init_time'] = time.perf_counter()
             self._show_frame()
-            self.perf_info['det']['end_time'] = time.time()
+            self.perf_info['det']['end_time'] = time.perf_counter()
 
     def _show_frame(self):   
-        # Calculate frame step based on speed
-        step = 1 #int(self.speed) if self.speed >= 1.0 else 1
+        step = 1
         self.frame_idx = min(self.total_frames - 1, self.frame_idx + step)
         
         # Read frame
@@ -449,11 +524,15 @@ class VideoFlowPlayer(GUI):
             self.toggle_play()
             self.frame_idx = 0
         
-        ret, frame_bgr = self.cap.read()
-        if not ret:
+        frame_bgr = self.read_frame()
+        
+        if frame_bgr is None:
+            print("End of video or failed to read frame")
+            self.toggle_play()
             return
+        
         #pose_viz = self.tracker.compute_bbox_pose(frame_bgr.copy())
-        pose_viz = self.tracker.detect(frame_bgr.copy())
+        pose_viz, pts, mem_viz1, mem_viz2 = self.tracker.detect(frame_bgr.copy())
         cv2.putText(pose_viz, f"Frame: {self.frame_idx+1}/{self.total_frames}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
         frame_resized = ImageProcessor.preprocess_for_display(
             frame_bgr, DISPLAY_W, DISPLAY_H, maintain_aspect=False
@@ -461,11 +540,20 @@ class VideoFlowPlayer(GUI):
         flow_resized = ImageProcessor.preprocess_for_display(
             pose_viz, DISPLAY_W, DISPLAY_H, maintain_aspect=False
         )
+        mem_viz_resized1 = ImageProcessor.preprocess_for_display(
+            mem_viz1, DISPLAY_W, DISPLAY_H, maintain_aspect=False
+        )
+        mem_viz_resized2 = ImageProcessor.preprocess_for_display(
+            mem_viz2, DISPLAY_W, DISPLAY_H, maintain_aspect=False
+        )
+
         # Put frame data in queue (non-blocking, skip if full)
         try:
             self.frame_queue.put_nowait({
-                'left': frame_resized,
-                'right': flow_resized,
+                'frame_1': frame_resized,
+                'frame_2': flow_resized,
+                'frame_3': mem_viz_resized1,
+                'frame_4': mem_viz_resized2,
                 'idx': self.frame_idx,
                 'total': self.total_frames,
                 'mode': self.flow_mode,
@@ -475,22 +563,26 @@ class VideoFlowPlayer(GUI):
             print("Frame queue full, skipping frame", self.frame_idx)
             pass  # Skip frame if queue is full
         
-        # Control playback speed
-        self.gui.update_text('frame_idx', str(self.frame_idx).zfill(5))
+        # Control playback speed (no GUI updates from worker thread)
         if self.speed < 8.0:
             time.sleep(max(0.001, 1.0 / (self.fps * self.speed)))
     
     def _process_frame_queue(self):
         """Timer callback on main thread: Update GUI with queued frame data"""
+        # Begin frame timing
         self.calculate_performance('frame')
-        self.perf_info['frame']['init_time'] = time.time()
+        self.perf_info['frame']['init_time'] = time.perf_counter()
         
         try:
             # Get frame data from queue (non-blocking)
             frame_data = self.frame_queue.get_nowait()
         
-            self.gui.update_image("left_label", frame_data['left'])
-            self.gui.update_image("right_label", frame_data['right'])
+            self.gui.update_image("frame_1", frame_data['frame_1'])
+            self.gui.update_image("frame_2", frame_data['frame_2'])
+            self.gui.update_image("frame_3", frame_data['frame_3'])
+            self.gui.update_image("frame_4", frame_data['frame_4'])
+            # Update frame index entry on main thread
+            self.gui.update_text('frame_idx', str(frame_data['idx']).zfill(5))
         
             status_text = (f"Frame {frame_data['idx']+1}/{frame_data['total']} | "
                           f"Mode: {frame_data['mode']} | Speed: {frame_data['speed']}x")
@@ -499,7 +591,9 @@ class VideoFlowPlayer(GUI):
         except queue.Empty:
             pass
         
-        self.perf_info['frame']['end_time'] = time.time()
+        # End frame timing and update both frame and det labels from main thread
+        self.perf_info['frame']['end_time'] = time.perf_counter()
+        
     
     def run(self):
         """Start the application"""
@@ -542,8 +636,11 @@ def main():
         from PIL import Image, ImageTk
     
     elif backend == 'qt':
-        from PyQt5.QtWidgets import QApplication
-        os.environ['QT_QPA_PLATFORM_PLUGIN_PATH'] = '1'
+        # Prefer PySide6 (Qt for Python); framework will fall back to PyQt5
+        #os.environ['QT_QPA_PLATFORM_PLUGIN_PATH'] = '1'
+        #from PyQt5.QtWidgets import QApplication  # noqa: F401
+        from PySide6.QtWidgets import QApplication  # noqa: F401
+        #sudo apt install -y libxcb-cursor0
     
     elif backend == 'wx':
         import wx
@@ -556,7 +653,8 @@ def main():
     #tracker = RTMPoseTracker(device='cuda', conf_threshold=0.2, det_fw='torch', pose_fw='torch')
     #tracker = MovenetPoseTracker()
     #tracker = BlazePoseTracker()
-    tracker  = OpticalFlowTracker(flow_mode="sparse")
+    tracker  = OpticalFlowTracker()
+    #tracker  = motionflow_cpp.OpticalFlowTrackerCpp("sparse")
     
     # Create and run application
     player = VideoFlowPlayer(backend=backend, tracker=tracker)

@@ -47,6 +47,46 @@ else:
 
 # WebSocket connections for real-time updates
 active_connections: Dict[str, WebSocket] = {}
+last_camera_status: Dict[str, str] = {}  # Track last known camera status
+
+async def check_camera_status_changes():
+    """Background task to check for camera status changes and broadcast updates"""
+    global last_camera_status
+    while True:
+        try:
+            cameras = recording_service.get_cameras()
+            for camera in cameras:
+                current_status = camera.status.value
+                last_status = last_camera_status.get(camera.id)
+                
+                if last_status != current_status:
+                    last_camera_status[camera.id] = current_status
+                    await broadcast_message({
+                        "type": "camera_status_updated",
+                        "camera_id": camera.id,
+                        "status": current_status,
+                        "camera": camera.dict()
+                    })
+                    logger.info(f"Camera {camera.id} status changed to {current_status}")
+                    
+        except Exception as e:
+            logger.error(f"Error checking camera status: {e}")
+        
+        # Check every 2 seconds
+        await asyncio.sleep(2)
+
+# Start the background task
+@app.on_event("startup")
+async def startup_event():
+    """Initialize background tasks"""
+    # Initialize camera status tracking
+    cameras = recording_service.get_cameras()
+    for camera in cameras:
+        last_camera_status[camera.id] = camera.status.value
+    
+    # Start status checking task
+    asyncio.create_task(check_camera_status_changes())
+    logger.info("Started camera status monitoring")
 
 @app.websocket("/ws/{client_id}")
 async def websocket_endpoint(websocket: WebSocket, client_id: str):
@@ -106,21 +146,63 @@ async def delete_camera(camera_id: str):
         logger.error(f"Failed to delete camera: {e}")
         raise HTTPException(status_code=404, detail=str(e))
 
+@app.post("/api/cameras/{camera_id}/start")
+async def start_camera(camera_id: str):
+    """Start/Connect to a camera"""
+    try:
+        success = recording_service.start_camera(camera_id)
+        if success:
+            await broadcast_message({"type": "camera_started", "camera_id": camera_id})
+            return {"message": "Camera started successfully"}
+        else:
+            raise HTTPException(status_code=400, detail="Failed to start camera - camera may be unavailable or in use")
+    except ValueError as e:
+        logger.error(f"Camera not found: {e}")
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to start camera: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/cameras/{camera_id}/stop")
+async def stop_camera(camera_id: str):
+    """Stop/Disconnect from a camera"""
+    try:
+        recording_service.stop_camera(camera_id)
+        await broadcast_message({"type": "camera_stopped", "camera_id": camera_id})
+        return {"message": "Camera stopped successfully"}
+    except Exception as e:
+        logger.error(f"Failed to stop camera: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+
 # Recording management endpoints
 @app.post("/api/cameras/{camera_id}/start-recording")
 async def start_recording(camera_id: str, background_tasks: BackgroundTasks):
     """Start recording from a camera"""
+    logger.info(f"Start recording request for camera: {camera_id}")
     try:
-        recording = await recording_service.start_recording(camera_id)
+        # Check if camera exists and get its status
+        if camera_id not in recording_service.cameras:
+            logger.error(f"Camera not found: {camera_id}")
+            raise HTTPException(status_code=404, detail=f"Camera not found: {camera_id}")
+        
+        camera = recording_service.cameras[camera_id]
+        logger.info(f"Camera status: {camera.status}, name: {camera.name}")
+        
+        recording_id = recording_service.start_recording(camera_id)
+        logger.info(f"Recording started successfully: {recording_id}")
+        
         await broadcast_message({
             "type": "recording_started", 
             "camera_id": camera_id,
-            "recording": recording.dict()
+            "recording_id": recording_id
         })
-        return {"message": "Recording started", "recording_id": recording.id}
+        return {"message": "Recording started", "recording_id": recording_id}
+    except ValueError as e:
+        logger.error(f"Validation error starting recording: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         logger.error(f"Failed to start recording: {e}")
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/cameras/{camera_id}/stop-recording")
 async def stop_recording(camera_id: str):
@@ -160,6 +242,16 @@ async def get_camera_stream(camera_id: str):
     except Exception as e:
         logger.error(f"Failed to get camera stream: {e}")
         raise HTTPException(status_code=404, detail=str(e))
+
+@app.post("/api/cameras/{camera_id}/stream/close")
+async def close_camera_stream(camera_id: str):
+    """Close camera stream to free resources"""
+    try:
+        streaming_service.close_camera_stream(camera_id)
+        return {"message": "Camera stream closed successfully"}
+    except Exception as e:
+        logger.error(f"Failed to close camera stream: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/recordings/{recording_id}/stream")
 async def get_recording_stream(recording_id: str):

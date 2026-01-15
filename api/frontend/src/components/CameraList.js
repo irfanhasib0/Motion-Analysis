@@ -1,9 +1,10 @@
 import React, { useState } from 'react';
-import { Plus, Edit, Trash2, Play, Square, Settings } from 'lucide-react';
+import { Plus, Edit, Trash2, Play, Square, Settings, Power, PowerOff } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { api } from '../services/api';
 
 const CameraList = ({ cameras, setCameras }) => {
+  console.log('CameraList component rendered with cameras:', cameras);
   const [showAddModal, setShowAddModal] = useState(false);
   const [editingCamera, setEditingCamera] = useState(null);
   const [newCamera, setNewCamera] = useState({
@@ -66,20 +67,72 @@ const CameraList = ({ cameras, setCameras }) => {
   };
 
   const handleStartRecording = async (cameraId) => {
+    console.log('handleStartRecording called for:', cameraId);
     try {
-      await api.startRecording(cameraId);
+      console.log('Calling api.startRecording...');
+      const response = await api.startRecording(cameraId);
+      console.log('Recording API response:', response);
+      // Update camera status to recording
+      setCameras(prev => prev.map(c => 
+        c.id === cameraId 
+          ? { ...c, status: 'recording' }
+          : c
+      ));
       toast.success('Recording started');
     } catch (error) {
+      console.error('Start recording error:', error);
       toast.error('Failed to start recording: ' + (error.response?.data?.detail || error.message));
     }
   };
 
   const handleStopRecording = async (cameraId) => {
+    console.log('handleStopRecording called for:', cameraId);
     try {
       await api.stopRecording(cameraId);
+      // Update camera status back to online
+      setCameras(prev => prev.map(c => 
+        c.id === cameraId 
+          ? { ...c, status: 'online' }
+          : c
+      ));
       toast.success('Recording stopped');
     } catch (error) {
+      console.error('Stop recording error:', error);
       toast.error('Failed to stop recording: ' + (error.response?.data?.detail || error.message));
+    }
+  };
+
+  const handleStartCamera = async (cameraId) => {
+    console.log('handleStartCamera called for:', cameraId);
+    try {
+      await api.startCamera(cameraId);
+      // Update camera status in local state
+      setCameras(prev => prev.map(c => 
+        c.id === cameraId 
+          ? { ...c, status: 'online', last_seen: new Date().toISOString() }
+          : c
+      ));
+      toast.success('Camera started');
+    } catch (error) {
+      console.error('Start camera error:', error);
+      toast.error('Failed to start camera: ' + (error.response?.data?.detail || error.message));
+    }
+  };
+
+  const handleStopCamera = async (cameraId) => {
+    console.log('handleStopCamera called for:', cameraId);
+    try {
+      await api.stopCamera(cameraId);
+      // Update camera status to offline
+      setCameras(prev => prev.map(c => 
+        c.id === cameraId 
+          ? { ...c, status: 'offline' }
+          : c
+      ));
+      toast.success('Camera stopped');
+    } catch (error) {
+      console.error('Stop camera error:', error);
+      toast.error('Failed to stop camera: ' + (error.response?.data?.detail || error.message));
     }
   };
 
@@ -114,11 +167,16 @@ const CameraList = ({ cameras, setCameras }) => {
             
             <div className="form-group">
               <label className="form-label">Camera Type</label>
+              {/* DEBUG: Updated with recorded option - version 1.0 */}
               <select 
                 className="form-control form-select"
                 value={camera.camera_type}
-                onChange={(e) => onChange({...camera, camera_type: e.target.value})}
+                onChange={(e) => {
+                  console.log('Camera type changed to:', e.target.value);
+                  onChange({...camera, camera_type: e.target.value});
+                }}
               >
+                <option value="recorded">Recorded Data</option>
                 <option value="rtsp">RTSP Stream</option>
                 <option value="webcam">Webcam</option>
                 <option value="ip_camera">IP Camera</option>
@@ -133,6 +191,7 @@ const CameraList = ({ cameras, setCameras }) => {
                 value={camera.source}
                 onChange={(e) => onChange({...camera, source: e.target.value})}
                 placeholder={
+                  camera.camera_type === 'recorded' ? '/path/to/video/file.mp4 or recording_id' :
                   camera.camera_type === 'rtsp' ? 'rtsp://username:password@ip:port/path' :
                   camera.camera_type === 'webcam' ? '0' :
                   'http://ip:port/video'
@@ -153,6 +212,7 @@ const CameraList = ({ cameras, setCameras }) => {
                   <option value="1280x720">1280x720</option>
                   <option value="1920x1080">1920x1080</option>
                   <option value="3840x2160">3840x2160</option>
+                  <option value="7680x4320">7680x4320</option>
                 </select>
               </div>
               
@@ -240,7 +300,9 @@ const CameraList = ({ cameras, setCameras }) => {
         </div>
         
         <div className="camera-grid">
-          {cameras.map(camera => (
+          {cameras.map(camera => {
+            console.log('Rendering camera:', camera.name, 'status:', camera.status, 'id:', camera.id);
+            return (
             <div key={camera.id} className="camera-card">
               <div className="camera-header">
                 <div className="camera-title">{camera.name}</div>
@@ -252,16 +314,19 @@ const CameraList = ({ cameras, setCameras }) => {
                   <span>{camera.camera_type}</span>
                 </div>
               </div>
-              
+
               <div className="camera-video">
                 {camera.status === 'online' || camera.status === 'recording' ? (
                   <img 
-                    src={api.getCameraStreamUrl(camera.id)}
+                    src={''}/*api.getCameraStreamUrl(camera.id)}*/
                     alt={`Camera ${camera.name}`}
                     className="camera-stream"
                     onError={(e) => {
                       e.target.style.display = 'none';
-                      e.target.nextSibling.style.display = 'flex';
+                      const nextSibling = e.target.nextSibling;
+                      if (nextSibling && nextSibling.style) {
+                        nextSibling.style.display = 'flex';
+                      }
                     }}
                   />
                 ) : null}
@@ -271,7 +336,6 @@ const CameraList = ({ cameras, setCameras }) => {
                     <small>{camera.source}</small>
                   </div>
                 )}
-                
                 {camera.processing_active && (
                   <div className="processing-indicator">
                     {camera.processing_type}
@@ -280,22 +344,57 @@ const CameraList = ({ cameras, setCameras }) => {
               </div>
 
               <div className="camera-controls">
+                <button 
+                  className="btn btn-warning"
+                  onClick={() => {
+                    console.log('Test button clicked for camera:', camera.id, camera.name);
+                    alert(`Camera: ${camera.name}, Status: ${camera.status}, ID: ${camera.id}`);
+                  }}
+                  style={{ marginRight: '8px' }}
+                >
+                  Test Click
+                </button>
+                
+                {camera.status === 'offline' || camera.status === 'error' ? (
+                  <button 
+                    className="btn btn-success"
+                    onClick={() => handleStartCamera(camera.id)}
+                  >
+                    <Power size={14} />
+                    Start
+                  </button>
+                ) : (
+                  <button 
+                    className="btn btn-secondary"
+                    onClick={() => handleStopCamera(camera.id)}
+                    disabled={camera.status === 'recording'}
+                  >
+                    <PowerOff size={14} />
+                    Stop
+                  </button>
+                )}
+                
                 {camera.status === 'recording' ? (
                   <button 
                     className="btn btn-danger"
                     onClick={() => handleStopRecording(camera.id)}
                   >
                     <Square size={14} />
-                    Stop
+                    Stop Rec
                   </button>
                 ) : (
                   <button 
                     className="btn btn-success"
-                    onClick={() => handleStartRecording(camera.id)}
+                    onClick={() => {
+                      console.log('Record button clicked! Camera status:', camera.status, 'ID:', camera.id);
+                      alert('Record button clicked! Check console now.');
+                      handleStartRecording(camera.id);
+                    }}
                     disabled={camera.status !== 'online'}
+                    title={camera.status !== 'online' ? `Camera must be online to record (current: ${camera.status})` : 'Start recording'}
                   >
                     <Play size={14} />
-                    Record
+                    Record {camera.status !== 'online' ? '(Disabled)' : ''}
                   </button>
                 )}
                 
@@ -316,7 +415,8 @@ const CameraList = ({ cameras, setCameras }) => {
                 </button>
               </div>
             </div>
-          ))}
+            );
+          })}
           
           {cameras.length === 0 && (
             <div className="camera-card">
@@ -342,7 +442,7 @@ const CameraList = ({ cameras, setCameras }) => {
           camera={newCamera}
           onChange={setNewCamera}
           onSubmit={handleAddCamera}
-          title="Add New Camera"
+          title="Add New Camera ..."
           submitText="Add Camera"
         />
       )}

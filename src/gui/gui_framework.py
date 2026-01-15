@@ -20,7 +20,7 @@ from enum import Enum
 
 class GUIBackend(Enum):
     TKINTER = "tk"
-    PYQT5 = "qt"
+    PYQT5 = "qt"  # 'qt' selects a Qt for Python backend (PySide6 preferred)
     WXPYTHON = "wx"
 
 class AbstractGUIBackend(ABC):
@@ -71,7 +71,15 @@ class AbstractGUIBackend(ABC):
         pass
     
     @abstractmethod
+    def show_folder_dialog(self, title="Select Folder"):
+        pass
+    
+    @abstractmethod
     def show_input_dialog(self, title, prompt, min_val=None, max_val=None):
+        pass
+    
+    @abstractmethod
+    def show_message_box(self, title, message, buttons=None):
         pass
     
     @abstractmethod
@@ -211,11 +219,67 @@ class TkinterBackend(AbstractGUIBackend):
             filetypes = [("Video files", "*.mp4 *.avi *.mov *.mkv"), ("All files", "*.*")]
         return self.filedialog.askopenfilename(filetypes=filetypes)
     
+    def show_folder_dialog(self, title="Select Folder"):
+        """Show a folder selection dialog"""
+        return self.filedialog.askdirectory(title=title)
+    
     def show_input_dialog(self, title, prompt, min_val=None, max_val=None):
         kwargs = {}
         if min_val is not None: kwargs['minvalue'] = min_val
         if max_val is not None: kwargs['maxvalue'] = max_val
         return self.simpledialog.askinteger(title, prompt, **kwargs)
+    
+    def show_message_box(self, title, message, buttons=None):
+        """Show a message box with custom buttons"""
+        import tkinter.messagebox as msgbox
+        
+        if buttons is None:
+            buttons = ["OK"]
+        
+        if len(buttons) == 1:
+            msgbox.showinfo(title, message)
+            return buttons[0]
+        elif len(buttons) == 2:
+            result = msgbox.askyesno(title, message)
+            return buttons[0] if result else buttons[1]
+        elif len(buttons) == 3:
+            # For 3 buttons, use askyesnocancel
+            result = msgbox.askyesnocancel(title, message)
+            if result is True:
+                return buttons[0]
+            elif result is False:
+                return buttons[1]
+            else:
+                return buttons[2]
+        else:
+            # For more complex cases, create custom dialog
+            dialog = self.tk.Toplevel()
+            dialog.title(title)
+            dialog.geometry("300x150")
+            dialog.transient(self.root)
+            dialog.grab_set()
+            
+            result = [None]
+            
+            # Message label
+            label = self.tk.Label(dialog, text=message, wraplength=250)
+            label.pack(pady=20)
+            
+            # Button frame
+            btn_frame = self.tk.Frame(dialog)
+            btn_frame.pack(pady=10)
+            
+            def on_button_click(button_text):
+                result[0] = button_text
+                dialog.destroy()
+            
+            for button_text in buttons:
+                btn = self.tk.Button(btn_frame, text=button_text, 
+                                   command=lambda bt=button_text: on_button_click(bt))
+                btn.pack(side=self.tk.LEFT, padx=5)
+            
+            dialog.wait_window()
+            return result[0]
     
     def run(self):
         if self.root:
@@ -225,17 +289,16 @@ class TkinterBackend(AbstractGUIBackend):
         if self.root:
             self.root.destroy()
 
-class PyQt5Backend(AbstractGUIBackend):
-    """PyQt5 implementation of GUI backend"""
-    
+class PySide6Backend(AbstractGUIBackend):
+    """PySide6 implementation of GUI backend (Qt for Python)"""
     def __init__(self):
-        from PyQt5.QtWidgets import (
-            QApplication, QWidget, QLabel, QPushButton, QRadioButton, 
+        from PySide6.QtWidgets import (
+            QApplication, QWidget, QLabel, QPushButton, QRadioButton,
             QHBoxLayout, QVBoxLayout, QFileDialog, QInputDialog, QButtonGroup
         )
-        from PyQt5.QtCore import Qt, QTimer
-        from PyQt5.QtGui import QImage, QPixmap
-        
+        from PySide6.QtCore import Qt, QTimer
+        from PySide6.QtGui import QImage, QPixmap
+
         self.QApplication = QApplication
         self.QWidget = QWidget
         self.QLabel = QLabel
@@ -250,39 +313,30 @@ class PyQt5Backend(AbstractGUIBackend):
         self.QTimer = QTimer
         self.QImage = QImage
         self.QPixmap = QPixmap
-        
+
         # Initialize QApplication if not exists
         if not QApplication.instance():
             self.app = QApplication(sys.argv)
         else:
             self.app = QApplication.instance()
-            
+
         self.window = None
         self.timer = None
         self.radio_groups = {}
-    
+
     def create_window(self, title, width, height):
         self.window = self.QWidget()
         self.window.setWindowTitle(title)
-        self.window.setFixedSize(width, height)
+        self.window.resize(width, height)
         return self.window
-    
+
     def create_button(self, parent, text, callback, x=None, y=None):
         btn = self.QPushButton(text, parent)
         btn.clicked.connect(callback)
-        
-        # Set reasonable minimum size for buttons
-        btn.setMinimumSize(60, 30)
-        
         if x is not None and y is not None:
             btn.move(x, y)
-            # Auto-size based on text content with some padding
-            btn.adjustSize()
-            # Ensure minimum width to prevent overlapping
-            if btn.width() < 60:
-                btn.setFixedWidth(60)
         return btn
-    
+
     def create_label(self, parent, text="", x=None, y=None, width=None, height=None):
         label = self.QLabel(text, parent)
         if x is not None and y is not None:
@@ -290,35 +344,29 @@ class PyQt5Backend(AbstractGUIBackend):
         if width and height:
             label.setFixedSize(width, height)
         return label
-    
+
     def create_entry(self, parent, text="", x=None, y=None, width=None, height=None):
-        from PyQt5.QtWidgets import QLineEdit
+        from PySide6.QtWidgets import QLineEdit
         entry = QLineEdit(parent)
         if text:
             entry.setText(text)
         if width and height:
             entry.setFixedSize(width, height)
-        # Set a reasonable minimum height
         entry.setMinimumHeight(24)
         if x is not None and y is not None:
             entry.move(x, y)
         return entry
-    
+
     def create_radiobutton(self, parent, text, group, value, callback=None):
         if group not in self.radio_groups:
             self.radio_groups[group] = self.QButtonGroup(parent)
-        
         radio = self.QRadioButton(text, parent)
         self.radio_groups[group].addButton(radio)
-        
-        # Set reasonable size for radio buttons
         radio.adjustSize()
-        
         if callback:
             radio.toggled.connect(lambda checked: callback(value) if checked else None)
-        
         return radio
-    
+
     def create_frame(self, parent, x=None, y=None, width=None, height=None):
         frame = self.QWidget(parent)
         if x is not None and y is not None:
@@ -326,9 +374,8 @@ class PyQt5Backend(AbstractGUIBackend):
         if width and height:
             frame.setFixedSize(width, height)
         return frame
-    
+
     def update_image(self, label, image_array):
-        """Update label with numpy array image (RGB format expected)"""
         h, w = image_array.shape[:2]
         if len(image_array.shape) == 3:
             bytes_per_line = 3 * w
@@ -336,41 +383,41 @@ class PyQt5Backend(AbstractGUIBackend):
         else:
             bytes_per_line = w
             qimg = self.QImage(image_array.data, w, h, bytes_per_line, self.QImage.Format_Grayscale8)
-        
         pixmap = self.QPixmap.fromImage(qimg)
         label.setPixmap(pixmap)
-    
+
     def update_text(self, label, text):
         label.setText(text)
 
     def get_text(self, entry):
         return entry.text()
-    
+
     def start_timer(self, callback, interval):
         if self.timer is None:
             self.timer = self.QTimer()
             self.timer.timeout.connect(callback)
         self.timer.start(interval)
-    
+
     def stop_timer(self):
         if self.timer:
             self.timer.stop()
-    
+
     def show_file_dialog(self, filetypes=None):
         if filetypes is None:
             filter_str = "Video Files (*.mp4 *.avi *.mov *.mkv);;All Files (*)"
         else:
-            # Convert tkinter format to PyQt format
             filters = []
             for name, pattern in filetypes:
                 filters.append(f"{name} ({pattern})")
             filter_str = ";;".join(filters)
-        
         filename, _ = self.QFileDialog.getOpenFileName(
             self.window, "Open File", "", filter_str
         )
         return filename
-    
+    def show_folder_dialog(self, title="Select Folder"):
+        """Show a folder selection dialog"""
+        folder = self.QFileDialog.getExistingDirectory(None, title)
+        return folder if folder else None
     def show_input_dialog(self, title, prompt, min_val=None, max_val=None):
         value, ok = self.QInputDialog.getInt(
             self.window, title, prompt,
@@ -378,12 +425,39 @@ class PyQt5Backend(AbstractGUIBackend):
             max=max_val if max_val is not None else 2147483647
         )
         return value if ok else None
-    
+
+    def show_message_box(self, title, message, buttons=None):
+        """Show a message box with custom buttons"""
+        from PySide6.QtWidgets import QMessageBox
+        
+        if buttons is None:
+            buttons = ["OK"]
+        
+        msg_box = QMessageBox(self.window)
+        msg_box.setWindowTitle(title)
+        msg_box.setText(message)
+        
+        # Add custom buttons
+        button_objects = []
+        for button_text in buttons:
+            btn = msg_box.addButton(button_text, QMessageBox.AcceptRole)
+            button_objects.append((btn, button_text))
+        
+        msg_box.exec_()
+        clicked_button = msg_box.clickedButton()
+        
+        # Find which button was clicked
+        for btn_obj, btn_text in button_objects:
+            if btn_obj == clicked_button:
+                return btn_text
+        
+        return buttons[0] if buttons else None
+
     def run(self):
         if self.window:
             self.window.show()
-        sys.exit(self.app.exec_())
-    
+        sys.exit(self.app.exec())
+
     def quit(self):
         if self.window:
             self.window.close()
@@ -508,14 +582,20 @@ class WxPythonBackend(AbstractGUIBackend):
         if not image_array.flags['C_CONTIGUOUS']:
             image_array = np.ascontiguousarray(image_array)
         
-        # Convert to wx.Image and then wx.Bitmap
-        wx_image = self.wx.Image(width, height, image_array.tobytes())
+        # Convert to wx.Image using buffer API (more reliable across platforms)
+        try:
+            wx_image = self.wx.ImageFromBuffer(width, height, image_array)
+        except Exception:
+            # Fallback for older wx versions
+            wx_image = self.wx.Image(width, height)
+            wx_image.SetData(image_array.tobytes())
         bitmap = self.wx.Bitmap(wx_image)
         
         # Update the label (assuming it's a StaticBitmap)
         if isinstance(label, self.wx.StaticBitmap):
             label.SetBitmap(bitmap)
-            # Use Update() instead of Refresh() to avoid Pango issues
+            # Ensure repaint; some environments need explicit refresh
+            label.Refresh(False)
             label.Update()
         elif isinstance(label, self.wx.StaticText):
             # If it's a StaticText, we can't display images directly
@@ -569,6 +649,13 @@ class WxPythonBackend(AbstractGUIBackend):
                 return dlg.GetPath()
         return None
     
+    def show_folder_dialog(self, title="Select Folder"):
+        """Show a folder selection dialog"""
+        with self.wx.DirDialog(self.window, title, style=self.wx.DD_DEFAULT_STYLE) as dialog:
+            if dialog.ShowModal() == self.wx.ID_OK:
+                return dialog.GetPath()
+        return None
+    
     def show_input_dialog(self, title, prompt, min_val=None, max_val=None):
         """Show input dialog for integer input"""
         dlg = self.wx.TextEntryDialog(self.window, prompt, title)
@@ -586,6 +673,65 @@ class WxPythonBackend(AbstractGUIBackend):
         
         dlg.Destroy()
         return None
+    
+    def show_message_box(self, title, message, buttons=None):
+        """Show a message box with custom buttons"""
+        if buttons is None:
+            buttons = ["OK"]
+        
+        if len(buttons) == 1:
+            dlg = self.wx.MessageDialog(self.window, message, title, self.wx.OK)
+            dlg.ShowModal()
+            dlg.Destroy()
+            return buttons[0]
+        elif len(buttons) == 2:
+            dlg = self.wx.MessageDialog(self.window, message, title, 
+                                      self.wx.YES_NO)
+            result = dlg.ShowModal()
+            dlg.Destroy()
+            return buttons[0] if result == self.wx.ID_YES else buttons[1]
+        elif len(buttons) == 3:
+            dlg = self.wx.MessageDialog(self.window, message, title, 
+                                      self.wx.YES_NO | self.wx.CANCEL)
+            result = dlg.ShowModal()
+            dlg.Destroy()
+            if result == self.wx.ID_YES:
+                return buttons[0]
+            elif result == self.wx.ID_NO:
+                return buttons[1]
+            else:
+                return buttons[2]
+        else:
+            # For more complex cases, create custom dialog
+            dlg = self.wx.Dialog(self.window, title=title, size=(300, 150))
+            
+            # Create sizer for layout
+            sizer = self.wx.BoxSizer(self.wx.VERTICAL)
+            
+            # Message text
+            text = self.wx.StaticText(dlg, label=message)
+            sizer.Add(text, 0, self.wx.ALL | self.wx.CENTER, 20)
+            
+            # Button sizer
+            btn_sizer = self.wx.BoxSizer(self.wx.HORIZONTAL)
+            
+            result = [None]
+            
+            def on_button(event, button_text):
+                result[0] = button_text
+                dlg.EndModal(self.wx.ID_OK)
+            
+            for i, button_text in enumerate(buttons):
+                btn = self.wx.Button(dlg, id=self.wx.ID_ANY, label=button_text)
+                btn.Bind(self.wx.EVT_BUTTON, lambda evt, bt=button_text: on_button(evt, bt))
+                btn_sizer.Add(btn, 0, self.wx.ALL, 5)
+            
+            sizer.Add(btn_sizer, 0, self.wx.CENTER)
+            dlg.SetSizer(sizer)
+            
+            dlg.ShowModal()
+            dlg.Destroy()
+            return result[0]
     
     def run(self):
         """Start the GUI event loop"""
@@ -614,7 +760,9 @@ class GUIFramework:
         if self.backend_type == GUIBackend.TKINTER:
             self.backend = TkinterBackend()
         elif self.backend_type == GUIBackend.PYQT5:
-            self.backend = PyQt5Backend()
+            self.backend = PySide6Backend()
+        #elif self.backend_type == GUIBackend.PYQT5:
+        #    self.backend = PyQt5Backend()
         elif self.backend_type == GUIBackend.WXPYTHON:
             self.backend = WxPythonBackend()
         else:
@@ -686,9 +834,17 @@ class GUIFramework:
         """Show file selection dialog"""
         return self.backend.show_file_dialog(filetypes)
     
+    def show_folder_dialog(self, title="Select Folder"):
+        """Show folder selection dialog"""
+        return self.backend.show_folder_dialog(title)
+    
     def show_input_dialog(self, title, prompt, min_val=None, max_val=None):
         """Show input dialog for integer input"""
         return self.backend.show_input_dialog(title, prompt, min_val, max_val)
+    
+    def show_message_box(self, title, message, buttons=None):
+        """Show message box with custom buttons"""
+        return self.backend.show_message_box(title, message, buttons)
     
     def get_component(self, name):
         """Get component by name"""
