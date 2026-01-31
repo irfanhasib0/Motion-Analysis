@@ -31,7 +31,7 @@ class AbstractGUIBackend(ABC):
         pass
     
     @abstractmethod
-    def create_button(self, parent, text, callback, x=None, y=None):
+    def create_button(self, parent, text, callback, x=None, y=None, width=None, height=None):
         pass
     
     @abstractmethod
@@ -48,6 +48,21 @@ class AbstractGUIBackend(ABC):
 
     @abstractmethod
     def create_entry(self, parent, text="", x=None, y=None, width=None):
+        pass
+    
+    @abstractmethod
+    def create_dropdown(self, parent, options, callback=None, x=None, y=None, width=None, height=None):
+        """Create a dropdown (combo box) with given options and selection callback"""
+        pass
+    
+    @abstractmethod
+    def update_dropdown_options(self, dropdown, options):
+        """Update dropdown options after creation"""
+        pass
+    
+    @abstractmethod
+    def get_dropdown_value(self, dropdown):
+        """Get currently selected value from dropdown"""
         pass
     
     @abstractmethod
@@ -71,7 +86,7 @@ class AbstractGUIBackend(ABC):
         pass
     
     @abstractmethod
-    def show_folder_dialog(self, title="Select Folder"):
+    def show_folder_dialog(self, title="Select Folder", initial_dir=None):
         pass
     
     @abstractmethod
@@ -95,12 +110,13 @@ class TkinterBackend(AbstractGUIBackend):
     
     def __init__(self):
         import tkinter as tk
-        from tkinter import filedialog, simpledialog
+        from tkinter import filedialog, simpledialog, ttk
         from PIL import Image, ImageTk
         
         self.tk = tk
         self.filedialog = filedialog
         self.simpledialog = simpledialog
+        self.ttk = ttk
         self.Image = Image
         self.ImageTk = ImageTk
         
@@ -120,8 +136,12 @@ class TkinterBackend(AbstractGUIBackend):
         self.root.geometry(f"{width}x{height}")
         return self.root
     
-    def create_button(self, parent, text, callback, x=None, y=None):
+    def create_button(self, parent, text, callback, x=None, y=None, width=None, height=None):
         btn = self.tk.Button(parent, text=text, command=callback)
+        if width:
+            btn.config(width=width)
+        if height:
+            btn.config(height=height)
         if x is not None and y is not None:
             btn.place(x=x, y=y)
         else:
@@ -179,6 +199,37 @@ class TkinterBackend(AbstractGUIBackend):
             entry.pack()
         return entry
     
+    def create_dropdown(self, parent, options, callback=None, x=None, y=None, width=None, height=None):
+        """Create a dropdown using ttk.Combobox (readonly)"""
+        combo = self.ttk.Combobox(parent, values=list(options) if options is not None else [], state="readonly")
+        if width:
+            combo.config(width=width)
+        if options:
+            combo.current(0)
+        def on_select(event=None):
+            if callback:
+                callback(combo.get())
+        combo.bind("<<ComboboxSelected>>", on_select)
+        if x is not None and y is not None:
+            combo.place(x=x, y=y)
+        else:
+            combo.pack()
+        return combo
+    
+    def update_dropdown_options(self, dropdown, options):
+        """Update dropdown options using ttk.Combobox"""
+        current_selection = dropdown.get()
+        dropdown.config(values=list(options) if options is not None else [])
+        # Try to preserve selection if it still exists in new options
+        if current_selection in options:
+            dropdown.set(current_selection)
+        elif options:
+            dropdown.current(0)
+    
+    def get_dropdown_value(self, dropdown):
+        """Get currently selected value from ttk.Combobox"""
+        return dropdown.get()
+    
     def update_image(self, label, image_array):
         """Update label with numpy array image (RGB format expected)"""
         h, w = image_array.shape[:2]
@@ -219,9 +270,12 @@ class TkinterBackend(AbstractGUIBackend):
             filetypes = [("Video files", "*.mp4 *.avi *.mov *.mkv"), ("All files", "*.*")]
         return self.filedialog.askopenfilename(filetypes=filetypes)
     
-    def show_folder_dialog(self, title="Select Folder"):
+    def show_folder_dialog(self, title="Select Folder", initial_dir=None):
         """Show a folder selection dialog"""
-        return self.filedialog.askdirectory(title=title)
+        kwargs = {"title": title}
+        if initial_dir is not None:
+            kwargs["initialdir"] = initial_dir
+        return self.filedialog.askdirectory(**kwargs)
     
     def show_input_dialog(self, title, prompt, min_val=None, max_val=None):
         kwargs = {}
@@ -294,7 +348,7 @@ class PySide6Backend(AbstractGUIBackend):
     def __init__(self):
         from PySide6.QtWidgets import (
             QApplication, QWidget, QLabel, QPushButton, QRadioButton,
-            QHBoxLayout, QVBoxLayout, QFileDialog, QInputDialog, QButtonGroup
+            QHBoxLayout, QVBoxLayout, QFileDialog, QInputDialog, QButtonGroup, QComboBox
         )
         from PySide6.QtCore import Qt, QTimer
         from PySide6.QtGui import QImage, QPixmap
@@ -309,6 +363,7 @@ class PySide6Backend(AbstractGUIBackend):
         self.QFileDialog = QFileDialog
         self.QInputDialog = QInputDialog
         self.QButtonGroup = QButtonGroup
+        self.QComboBox = QComboBox
         self.Qt = Qt
         self.QTimer = QTimer
         self.QImage = QImage
@@ -321,7 +376,7 @@ class PySide6Backend(AbstractGUIBackend):
             self.app = QApplication.instance()
 
         self.window = None
-        self.timer = None
+        self.timer  = None
         self.radio_groups = {}
 
     def create_window(self, title, width, height):
@@ -330,9 +385,15 @@ class PySide6Backend(AbstractGUIBackend):
         self.window.resize(width, height)
         return self.window
 
-    def create_button(self, parent, text, callback, x=None, y=None):
+    def create_button(self, parent, text, callback, x=None, y=None, width=None, height=None):
         btn = self.QPushButton(text, parent)
         btn.clicked.connect(callback)
+        if width and height:
+            btn.setFixedSize(width, height)
+        elif width:
+            btn.setFixedWidth(width)
+        elif height:
+            btn.setFixedHeight(height)
         if x is not None and y is not None:
             btn.move(x, y)
         return btn
@@ -356,6 +417,36 @@ class PySide6Backend(AbstractGUIBackend):
         if x is not None and y is not None:
             entry.move(x, y)
         return entry
+
+    def create_dropdown(self, parent, options, callback=None, x=None, y=None, width=None, height=None):
+        """Create a dropdown using QComboBox"""
+        combo = self.QComboBox(parent)
+        if options:
+            combo.addItems(list(options))
+        if width and height:
+            combo.setFixedSize(width, height)
+        if x is not None and y is not None:
+            combo.move(x, y)
+        if callback:
+            combo.currentTextChanged.connect(lambda text: callback(text))
+        return combo
+
+    def update_dropdown_options(self, dropdown, options):
+        """Update dropdown options using QComboBox"""
+        current_text = dropdown.currentText()
+        dropdown.clear()
+        if options:
+            dropdown.addItems(list(options))
+            # Try to preserve selection if it still exists in new options
+            index = dropdown.findText(current_text)
+            if index >= 0:
+                dropdown.setCurrentIndex(index)
+            else:
+                dropdown.setCurrentIndex(0)
+
+    def get_dropdown_value(self, dropdown):
+        """Get currently selected value from QComboBox"""
+        return dropdown.currentText()
 
     def create_radiobutton(self, parent, text, group, value, callback=None):
         if group not in self.radio_groups:
@@ -414,9 +505,11 @@ class PySide6Backend(AbstractGUIBackend):
             self.window, "Open File", "", filter_str
         )
         return filename
-    def show_folder_dialog(self, title="Select Folder"):
+    
+    def show_folder_dialog(self, title="Select Folder", initial_dir=None):
         """Show a folder selection dialog"""
-        folder = self.QFileDialog.getExistingDirectory(None, title)
+        start_dir = initial_dir if initial_dir is not None else ""
+        folder = self.QFileDialog.getExistingDirectory(None, title, start_dir)
         return folder if folder else None
     def show_input_dialog(self, title, prompt, min_val=None, max_val=None):
         value, ok = self.QInputDialog.getInt(
@@ -487,8 +580,15 @@ class WxPythonBackend(AbstractGUIBackend):
         self.main_panel = self.wx.Panel(self.window)
         return self.main_panel
     
-    def create_button(self, parent, text, callback, x=None, y=None):
-        btn = self.wx.Button(parent, label=text)
+    def create_button(self, parent, text, callback, x=None, y=None, width=None, height=None):
+        if width and height:
+            btn = self.wx.Button(parent, label=text, size=(width, height))
+        elif width:
+            btn = self.wx.Button(parent, label=text, size=(width, -1))
+        elif height:
+            btn = self.wx.Button(parent, label=text, size=(-1, height))
+        else:
+            btn = self.wx.Button(parent, label=text)
         btn.Bind(self.wx.EVT_BUTTON, lambda evt: callback())
         
         if x is not None and y is not None:
@@ -525,6 +625,44 @@ class WxPythonBackend(AbstractGUIBackend):
             entry.SetPosition((x, y))
         
         return entry
+    
+    def create_dropdown(self, parent, options, callback=None, x=None, y=None, width=None, height=None):
+        """Create a dropdown using wx.Choice"""
+        size = (width, height) if (width and height) else self.wx.DefaultSize
+        choice = self.wx.Choice(parent, choices=list(options) if options is not None else [], size=size)
+        if x is not None and y is not None:
+            choice.SetPosition((x, y))
+        if options:
+            choice.SetSelection(0)
+        if callback:
+            def on_select(evt):
+                idx = choice.GetSelection()
+                if idx != self.wx.NOT_FOUND:
+                    callback(choice.GetString(idx))
+            choice.Bind(self.wx.EVT_CHOICE, on_select)
+        return choice
+    
+    def update_dropdown_options(self, dropdown, options):
+        """Update dropdown options using wx.Choice"""
+        current_selection = dropdown.GetSelection()
+        current_text = dropdown.GetString(current_selection) if current_selection != self.wx.NOT_FOUND else None
+        
+        dropdown.Clear()
+        if options:
+            dropdown.AppendItems(list(options))
+            # Try to preserve selection if it still exists in new options
+            if current_text and current_text in options:
+                new_index = list(options).index(current_text)
+                dropdown.SetSelection(new_index)
+            else:
+                dropdown.SetSelection(0)
+    
+    def get_dropdown_value(self, dropdown):
+        """Get currently selected value from wx.Choice"""
+        selection = dropdown.GetSelection()
+        if selection != self.wx.NOT_FOUND:
+            return dropdown.GetString(selection)
+        return None
     
     def create_radiobutton(self, parent, text, group, value, callback=None):
         # Create radio button group if it doesn't exist
@@ -649,9 +787,10 @@ class WxPythonBackend(AbstractGUIBackend):
                 return dlg.GetPath()
         return None
     
-    def show_folder_dialog(self, title="Select Folder"):
+    def show_folder_dialog(self, title="Select Folder", initial_dir=None):
         """Show a folder selection dialog"""
-        with self.wx.DirDialog(self.window, title, style=self.wx.DD_DEFAULT_STYLE) as dialog:
+        default_path = initial_dir if initial_dir is not None else ""
+        with self.wx.DirDialog(self.window, title, defaultPath=default_path, style=self.wx.DD_DEFAULT_STYLE) as dialog:
             if dialog.ShowModal() == self.wx.ID_OK:
                 return dialog.GetPath()
         return None
@@ -776,9 +915,9 @@ class GUIFramework:
         self.window = self.backend.create_window(title, width, height)
         return self.window
     
-    def create_button(self, parent, name, text, callback, x=None, y=None):
+    def create_button(self, parent, name, text, callback, x=None, y=None, width=None, height=None):
         """Create a button widget"""
-        button = self.backend.create_button(parent, text, callback, x, y)
+        button = self.backend.create_button(parent, text, callback, x, y, width, height)
         self.components[name] = button
         return button
     
@@ -805,6 +944,23 @@ class GUIFramework:
         entry = self.backend.create_entry(parent, text, x, y, width, height)
         self.components[name] = entry
         return entry
+    
+    def create_dropdown(self, parent, name, options, callback=None, x=None, y=None, width=None, height=None):
+        """Create a dropdown (combo box) widget"""
+        dropdown = self.backend.create_dropdown(parent, options, callback, x, y, width, height)
+        self.components[name] = dropdown
+        return dropdown
+    
+    def update_dropdown_options(self, dropdown_name, options):
+        """Update dropdown options by name"""
+        if dropdown_name in self.components:
+            self.backend.update_dropdown_options(self.components[dropdown_name], options)
+    
+    def get_dropdown_value(self, dropdown_name):
+        """Get currently selected value from dropdown by name"""
+        if dropdown_name in self.components:
+            return self.backend.get_dropdown_value(self.components[dropdown_name])
+        return None
     
     def update_image(self, label_name, image_array):
         """Update image in a label widget"""
@@ -834,9 +990,9 @@ class GUIFramework:
         """Show file selection dialog"""
         return self.backend.show_file_dialog(filetypes)
     
-    def show_folder_dialog(self, title="Select Folder"):
+    def show_folder_dialog(self, title="Select Folder", initial_dir=None):
         """Show folder selection dialog"""
-        return self.backend.show_folder_dialog(title)
+        return self.backend.show_folder_dialog(title, initial_dir)
     
     def show_input_dialog(self, title, prompt, min_val=None, max_val=None):
         """Show input dialog for integer input"""

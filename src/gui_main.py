@@ -29,8 +29,9 @@ import threading
 import queue
 import glob
 import numpy as np
+from pathlib import Path
 from gui.gui_framework import GUIFramework
-from gui.gui_utils import GUIComponents, ImageProcessor
+from gui.gui_comp import GUIComponents, ImageProcessor
 #from trackers.pose_tracker import RTMPoseTracker
 from improc.optical_flow import OpticalFlowTracker
 import cProfile, pstats, io
@@ -87,29 +88,36 @@ class GUI:
             self.window, "control_frame", 0, 0, self.window_width, 50
         )
         
-        # Create control buttons
-        self._create_control_buttons(control_frame)
-        
         # Flow mode selection frame
         mode_frame = self.gui.create_frame(
-            self.window, "mode_frame", 0, 60, self.window_width, 40
+            self.window, "mode_frame", 0, 40, self.window_width, 40
         )
-        
+
+        #  Create file selector frame
+        file_selector_frame = self.gui.create_frame(
+            self.window, "file_selector_frame", -80, 80, self.window_width, 40
+        )
+
         info_frame = self.gui.create_frame(
-            self.window, "info_frame", 0, 110, self.window_width//2, 200
+            self.window, "info_frame", 0, 120, self.window_width//2, 200
         )
 
         perf_frame = self.gui.create_frame(
             self.window, "perf_frame", self.window_width//2, 110, self.window_width//2, 200
         )
 
-        # Create flow mode controls
-        self._create_flow_mode_controls(mode_frame)
-        
         # Video display frame
         display_frame = self.gui.create_frame(
             self.window, "display_frame", 0, 320, self.window_width, 320+DISPLAY_H + 20
         )
+        
+        # Create control buttons
+        self._create_control_buttons(control_frame)
+        
+        self._create_file_selector(file_selector_frame)
+        
+        # Create flow mode controls
+        self._create_flow_mode_controls(mode_frame)
         
         # Create video displays
         self._create_video_displays(display_frame)
@@ -166,7 +174,7 @@ class GUI:
             ("next_btn", ">>", self.next_frame),
             ("faster_btn", "Faster", self.faster),
             ("slower_btn", "Slower", self.slower),
-            ("jump_btn", "Jump To", self.jump_to_dialog),
+            ("clear_log_btn", "Clear Log", self.clear_log)
         ]
         
         # Use the improved control panel creation
@@ -174,7 +182,17 @@ class GUI:
         GUIComponents.create_control_panel(
             self.gui, parent, "control_buttons", 10, 5, 600, 40, buttons
         )
-    
+
+    def _create_file_selector(self, parent):
+        # Get list of video files from current directory or a default path
+        files = sorted(os.listdir(str(self.curr_source_dir)))
+        GUIComponents.create_file_selector(
+            self.gui, parent, files, "file_selector", 100, 10,
+            callback_browse=self.browse_data,
+            callback_load=self.load_data,
+            callback_back=self.prev_dir,
+        )
+
     def _create_flow_mode_controls(self, parent):
         """Create flow mode radio buttons"""
         self.gui.create_label(parent, "mode_label", "Flow Mode:", 10, 10)
@@ -203,7 +221,6 @@ class GUI:
             x += DISPLAY_W + wpad
 
 
-
 class VideoFlowPlayer(GUI):
     def __init__(self, backend='tk', tracker=None):
         super().__init__(backend=backend)
@@ -220,6 +237,9 @@ class VideoFlowPlayer(GUI):
         self.files = None
         self.frame_width = DISPLAY_W
         self.frame_height = DISPLAY_H
+        self.curr_source_dir = Path('/media/irfan/TRANSCEND/action_data/')
+        if not self.curr_source_dir.exists():
+            self.curr_source_dir = Path('./data/')
 
         self.empty_frame = np.zeros((self.frame_height, self.frame_width, 3), dtype=np.uint8)
         # Performance tracking
@@ -241,7 +261,7 @@ class VideoFlowPlayer(GUI):
         self.frame_thread = threading.Thread(target=self._update_frame, daemon=True)
         self.frame_thread.start()
         #self.open_file(path='../../01_001.avi')
-        self.open_file(path='/media/irfan/TRANSCEND/action_data/stech/training/videos/01_001.avi')
+        self.open_file(path=self.curr_source_dir / 'stech/training/videos/01_001.avi')
         #self.open_file(path='/media/irfan/TRANSCEND/action_data/aven/training_videos/01.avi')
         self._show_frame()
         self.prof.enable()
@@ -298,10 +318,10 @@ class VideoFlowPlayer(GUI):
         # Update the right display title
         title_text = f"Optical Flow - {mode.capitalize()}"
         self.gui.update_text("right_title", title_text)
-        
+    
     def open_file(self, path=None):
+        """Open video file or image folder"""
         if path is None or path == False:
-            
             """Open video file dialog"""
             filetypes = [
                 ("Video files", "*.mp4 *.avi *.mov *.mkv"), 
@@ -318,16 +338,19 @@ class VideoFlowPlayer(GUI):
             if choice == "Video File":
                 path = self.gui.show_file_dialog(filetypes=filetypes)
             elif choice == "Image Folder":
-                path = self.gui.show_folder_dialog()
+                path = self.gui.show_folder_dialog("Select Image Folder", self.curr_source_dir)
                 if path and not path.endswith('/'):
                     path += '/'
             else:
+                print('Operation cancelled.')
                 return
-        
-        if path.endswith(('.mp4', '.avi', '.mov', '.mkv')):
+        self.open_folder_data(path)
+
+    def open_folder_data(self, path: Path):
+        if str(path).endswith(('.mp4', '.avi', '.mov', '.mkv')):
             self.release_video()
             print(f"Opening video file: {path}")
-            self.cap = cv2.VideoCapture(path)
+            self.cap = cv2.VideoCapture(str(path))
             self.cap.set(cv2.CAP_PROP_FPS, 30)
             self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.frame_width)#640)
             self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.frame_height)#480)
@@ -336,7 +359,7 @@ class VideoFlowPlayer(GUI):
             print(self.cap.get(cv2.CAP_PROP_FPS))
 
             if not self.cap.isOpened():
-                error_msg = f"Failed to open: {path.split('/')[-1]}"
+                error_msg = f"Failed to open: {path.name}"
                 self.gui.update_text("status_label", error_msg)
                 self.cap = None
                 return
@@ -349,24 +372,53 @@ class VideoFlowPlayer(GUI):
 
             self.tracker.restart()
 
-
-        elif path.endswith('/'):
-            self.files = sorted(glob.glob(os.path.join(path, '*.jpg')))
-            self.annot_files = sorted(glob.glob(os.path.join(path, '*.npy')))
-            self.total_frames = len(self.files)
-            self.fps = 25.0
-            self.cap = None
-            print(f"Found {self.total_frames} image files.")
-        else:
-            print(f"Unsupported file type: {path}")
-            return
+        if path.is_dir():
+            for ext in ['.jpg', '.png', '.jpeg', '.bmp', '.tiff']:
+                self.files = sorted(glob.glob(os.path.join(str(path), f'*{ext}')))
+                if len(self.files):
+                    break
+            if (self.files): 
+                self.annot_files  = sorted(glob.glob(os.path.join(str(path), '*.npy')))
+                self.total_frames = len(self.files)
+                self.fps = 25.0
+                self.cap = None
+                print(f"Found {self.total_frames} image files.")
+            else:
+                print(f"Unsupported file type: {path}")
+                self.browse_data(path = path)
+                return
 
         self.frame_idx = 0
         # Update status
-        filename = '/'.join(path.split('/')[-2:])
+        filename = '/'.join(str(path).split('/')[-2:])
         status_text = f"Loaded {filename} | {self.total_frames} frames @ {self.fps:.2f} fps"
         self.gui.update_text("status_label", status_text)
     
+    def browse_data(self, path = None):
+        """Update current source directory and refresh file selector"""
+        if path is None or path == False:
+           path = self.gui.show_folder_dialog("Select Source Directory", str(self.curr_source_dir))
+        if path is None or path == False:
+            print("No directory selected.")
+            return
+        self.curr_source_dir = Path(path)
+        files = sorted(os.listdir(self.curr_source_dir))
+        self.gui.update_dropdown_options("file_selector", files)
+        print(f"Source directory updated to: {self.curr_source_dir}")
+
+    def load_data(self):
+        path = self.curr_source_dir / self.gui.get_dropdown_value("file_selector")
+        print(f"Loading: {str(path)}")
+        self.open_folder_data(path)
+    
+    def prev_dir(self):
+        """Go to parent directory and refresh file selector"""
+        parent_dir = self.curr_source_dir.parent
+        self.curr_source_dir = parent_dir
+        files = sorted(os.listdir(self.curr_source_dir))
+        self.gui.update_dropdown_options("file_selector", files)
+        print(f"Moved to parent directory: {self.curr_source_dir}")
+        
     def read_frame(self):
         if self.cap is not None:
             ret, frame = self.cap.read()
@@ -381,14 +433,12 @@ class VideoFlowPlayer(GUI):
                     annot = np.load(self.annot_files[self.frame_idx])
                 self.frame_idx += 1
                 return frame
-        return None
     
     def _stop_playback(self):
         """Stop playback and update UI"""
         self.playing = False
         # Update button text using backend-agnostic method
         self.gui.update_text("control_buttons_btn_1", "Play")
-    
 
     def next_frame(self):
         """Advance to next frame"""
@@ -451,34 +501,23 @@ class VideoFlowPlayer(GUI):
                           f"Mode: {self.flow_mode} | Speed: {self.speed}x")
         self.gui.update_text("status_label", status_text)
     
-    def jump_to_dialog(self):
-        """Show dialog to jump to specific frame"""
-        if not self.cap:
-            return
-        
-        frame_num = self.gui.show_input_dialog(
-            "Jump To Frame", 
-            f"Enter frame number (1-{self.total_frames}):",
-            min_val=1, max_val=self.total_frames
-        )
-        
-        if frame_num is not None:
-            self._stop_playback()
-            target_frame = frame_num - 1  # Convert to 0-based index
-            self._update_frame(target_frame)
-            print(f"Jumped to frame: {frame_num}")
+    def clear_log(self):
+        """Clear the log output"""
+        self.tracker.coreset.clear_viz()
 
     def toggle_play(self):
         """Toggle play/pause"""
         if self.cap is None and self.files is None:
             return
-        
+
         if not self.playing:
             self.frame_idx = int(self.gui.get_text('frame_idx'))
             print(f"Playback resumed at frame: {self.frame_idx}")
             if self.cap is not None:
                 try:
                     self.cap.set(cv2.CAP_PROP_POS_FRAMES, self.frame_idx)
+                    if self.frame_idx == 0:
+                        self.tracker.restart()
                 except Exception as e:
                     print(f"Error setting frame position: {e}")
 
@@ -489,7 +528,6 @@ class VideoFlowPlayer(GUI):
                 self.frame_thread = threading.Thread(target=self._update_frame, daemon=True)
                 self.frame_thread.start()
             print("Playback started")
-        
         self.gui.update_text("control_buttons_btn_1", "Pause" if self.playing else "Play")
     
     def release_video(self):

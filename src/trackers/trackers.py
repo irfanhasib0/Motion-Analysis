@@ -1,12 +1,10 @@
 import sys
 import numpy as np
 
-try:
-    sys.path.insert(0,'../libs/ByteTrack')
-    from yolox.tracker.byte_tracker import BYTETracker, STrack
-    from yolox.tracker.basetrack import BaseTrack, TrackState
-except:
-    print("ByteTrack not found. Please ensure ByteTrack is installed and accessible.")
+sys.path.insert(0,'../libs/ByteTrack')
+from yolox.tracker.byte_tracker import BYTETracker, STrack
+from yolox.tracker.basetrack import BaseTrack, TrackState
+
     
 class SimpleTracker:
     """Simple tracking based on position similarity"""
@@ -138,7 +136,8 @@ class ByteTracker:
         self.args = Args()
         self.tracker = self.BYTETracker(self.args, frame_rate=frame_rate)
         self.frame_id = 0
-    
+    # nbyte_tracer.py: np.float -> np.float32
+    # matching.py : cython_bbox -> numpy implementation
     def update(self, detections):
         """
         Update tracker with new detections
@@ -159,15 +158,15 @@ class ByteTracker:
         if len(detections) == 0:
             online_targets = self.tracker.update(
                 np.empty((0, 5)),
-                [self.frame_id] * 0,
-                [self.frame_id] * 0
+                [480, 640],
+                [480, 640]
             )
             return {}
         
         # Convert detections to format expected by ByteTrack: [x1, y1, x2, y2, score]
         detection_array = []
         for det in detections:
-            bbox = det['bbox'][0] if isinstance(det['bbox'], list) else det['bbox']
+            bbox = det['bbox']#[0] if isinstance(det['bbox'], list) else det['bbox']
             
             # Calculate detection score from keypoint scores if not provided
             if 'score' in det:
@@ -205,7 +204,7 @@ class ByteTracker:
             best_iou = 0.0
             
             for idx, det in enumerate(detections):
-                det_bbox = det['bbox'][0] if isinstance(det['bbox'], list) else det['bbox']
+                det_bbox = det['bbox']#[0] if isinstance(det['bbox'], list) else det['bbox']
                 
                 # Calculate IOU
                 x1 = max(tlbr[0], det_bbox[0])
