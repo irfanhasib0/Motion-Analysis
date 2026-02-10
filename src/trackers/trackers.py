@@ -1,10 +1,6 @@
 import sys
+import cv2
 import numpy as np
-
-sys.path.insert(0,'../libs/ByteTrack')
-from yolox.tracker.byte_tracker import BYTETracker, STrack
-from yolox.tracker.basetrack import BaseTrack, TrackState
-
     
 class SimpleTracker:
     """Simple tracking based on position similarity"""
@@ -109,6 +105,13 @@ class SimpleTracker:
 class ByteTracker:
     """ByteTracker implementation for multi-object tracking"""
     
+    sys.path.insert(0,'../libs/ByteTrack')
+    try:
+        from yolox.tracker.byte_tracker import BYTETracker, STrack
+        from yolox.tracker.basetrack import BaseTrack, TrackState
+    except ImportError:
+        print("ByteTrack dependencies not found.")
+
     def __init__(self, track_thresh=0.5, track_buffer=30, match_thresh=0.8, frame_rate=30):
         """
         Initialize ByteTracker

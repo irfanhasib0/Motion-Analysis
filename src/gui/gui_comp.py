@@ -46,7 +46,16 @@ class GUIComponents:
         return panel
     
     @staticmethod
-    def create_file_selector(gui, parent, options, name, x, y, callback_load, callback_browse, callback_back):
+    def create_file_selector(gui, 
+                             parent, 
+                             options, 
+                             name,
+                             x, y,
+                             callback_load = None, 
+                             callback_browse = None, 
+                             callback_back = None, 
+                             callback_restart = None, 
+                             callback_play = None):
         """
         Create a file selector component with label and button
         
@@ -58,12 +67,90 @@ class GUIComponents:
             label_text: Label text
             callback: Callback function for button click
         """
-        label  = gui.create_dropdown(parent, f'{name}', options, lambda x:x, x, y)
-        load_button   = gui.create_button(parent, f"{name}_load_button", "Load", callback_load, x + 120, y, 50, 25)
-        back_button   = gui.create_button(parent, f"{name}_back_button", "Back", callback_back, x + 180, y, 50, 25)
-        browse_button = gui.create_button(parent, f"{name}_browse_button", "Browse...", callback_browse, x + 240, y, 70, 25)
-        return {'label': label, 'browse_button': browse_button, 'load_button': load_button, 'back_button': back_button}
+        x_pos = x
+        y_pos = y
+        gui.create_label(parent, f"{name}_label", 'File', x_pos, y_pos, 40, 20)
+        x_pos += 40
+        y_pos += 20
+        gui.create_dropdown(parent, f'{name}', options, lambda x:x, x_pos, y_pos, 100, 20)
+        x_pos += 110
+        gui.create_button(parent, f"{name}_load_button", "Load", callback_load, x_pos, y_pos, 50, 20)
+        x_pos += 60
+        gui.create_button(parent, f"{name}_back_button", "Back", callback_back, x_pos, y_pos, 50, 20)
+        x_pos = x + 40
+        y_pos += 30
+        gui.create_button(parent, f"{name}_play_button", "play", callback_play, x_pos, y_pos, 70, 20)
+        x_pos += 80
+        gui.create_button(parent, f"{name}_browse_button", "Browse...", callback_browse, x_pos, y_pos, 70, 20)
+        x_pos += 80
+        gui.create_button(parent, f"{name}_restart_button", "Restart", callback_restart, x_pos, y_pos, 60, 20)
+        
+    @staticmethod
+    def create_cam_selector(gui, 
+                            parent, 
+                            options, 
+                            name, 
+                            x, y, 
+                            callback_start = None, 
+                            callback_stop  = None, 
+                            callback_record = None, 
+                            callback_add = None, 
+                            callback_delete = None):
+        x_pos = x
+        y_pos = y
+        gui.create_label(parent, f"{name}_label", 'Cam', x_pos, y_pos, 40, 20)
+        x_pos += 40
+        y_pos += 20
+        gui.create_dropdown(parent, f'{name}', options, lambda x:x, x_pos, y_pos, 100, 20)
+        x_pos += 110
+        gui.create_button(parent, f"{name}_add", "add", callback_add, x_pos, y_pos, 40, 20)
+        x_pos += 60
+        gui.create_button(parent, f"{name}_del", "del", callback_delete, x_pos, y_pos, 40, 20)
+        x_pos = x + 40
+        y_pos += 30
+        gui.create_button(parent, f"{name}_start", "start", callback_start, x_pos, y_pos, 60, 20)
+        x_pos += 80
+        gui.create_button(parent, f"{name}_stop", "stop", callback_stop, x_pos, y_pos, 60, 20)
+        x_pos += 80
+        gui.create_button(parent, f"{name}_record", "record", callback_record, x_pos, y_pos, 60, 20)
+        
+        return
+        
+    @staticmethod
+    def create_result_viz(gui, parent, name, x, y, width, height):
+        gui.create_label(parent, f"{name}_title", 'Detections', x, y)
+        gui.create_label(parent, f"{name}_vel", "", x, y + 25, width, height)
+        gui.create_label(parent, f"{name}_id", "", x, y + 30 + height, width, 50)
     
+    
+    @staticmethod
+    def create_params_inp(gui, parent, name, x, y):
+        """
+        Create a labeled parameter input field
+        
+        Args:
+            gui: GUIFramework instance
+            parent: Parent widget
+            name: Input name
+            x, y: Position
+            label_text: Label text
+            default_value: Default input value
+        """
+        x_pos = x
+        gui.create_label(parent, '', f"frame", x_pos, y, 50, 20)   
+        gui.create_entry(parent, f"{name}_frame_idx", f"0".zfill(4), x_pos, y + 20, 50, 20)
+        x_pos += 70
+        gui.create_label(parent, '', f"max_kpts", x_pos, y, 50, 20)
+        gui.create_entry(parent, f"{name}_kpt_max_kpts", '--', x_pos, y + 20 , 50, 20)
+        x_pos += 70
+        gui.create_label(parent, '', f"hist", x_pos, y, 50, 20)
+        gui.create_entry(parent, f"{name}_bg_hist", "--", x_pos, y + 20, 50, 20)
+        x_pos += 70
+        gui.create_label(parent, '', f"det_freq", x_pos, y, 50, 20)
+        gui.create_entry(parent, f"{name}_kpt_det_freq", "--", x_pos, y + 20, 50, 20)
+
+        return   
+
     @staticmethod
     def create_radio_group(gui, parent, name, x, y, options, default=None, callback=None):
         """

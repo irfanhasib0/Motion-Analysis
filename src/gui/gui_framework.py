@@ -511,11 +511,10 @@ class PySide6Backend(AbstractGUIBackend):
         start_dir = initial_dir if initial_dir is not None else ""
         folder = self.QFileDialog.getExistingDirectory(None, title, start_dir)
         return folder if folder else None
+    
     def show_input_dialog(self, title, prompt, min_val=None, max_val=None):
-        value, ok = self.QInputDialog.getInt(
-            self.window, title, prompt,
-            min=min_val if min_val is not None else -2147483647,
-            max=max_val if max_val is not None else 2147483647
+        value, ok = self.QInputDialog.getText(
+            self.window, title, prompt
         )
         return value if ok else None
 
