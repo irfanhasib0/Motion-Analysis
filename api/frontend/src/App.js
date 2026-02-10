@@ -8,7 +8,7 @@ import CameraList from './components/CameraList';
 import RecordingList from './components/RecordingList';
 import LiveView from './components/LiveView';
 import SystemSettings from './components/SystemSettings';
-import { api } from './services/api';
+import { api } from './api';
 
 import './App.css';
 
@@ -42,7 +42,7 @@ function App() {
         api.getRecordings(),
         api.getSystemInfo()
       ]);
-      
+      console.log('Initial data loaded:', camerasRes.data, recordingsRes.data, systemRes.data);
       setCameras(camerasRes.data);
       setRecordings(recordingsRes.data);
       setSystemInfo(systemRes.data);

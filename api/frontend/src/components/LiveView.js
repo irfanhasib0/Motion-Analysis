@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Monitor, Maximize, Settings, Play, Square } from 'lucide-react';
 import { toast } from 'react-hot-toast';
-import { api } from '../services/api';
+import { api } from '../api';
 
 // Processing Modal Component
 const ProcessingModal = ({ 

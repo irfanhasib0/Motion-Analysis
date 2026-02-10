@@ -5,29 +5,40 @@ import threading
 import time
 import uuid
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 import psutil
 import logging
 
 from models.camera import Camera, CameraCreate, CameraUpdate, CameraType, CameraStatus
 from models.recording import Recording, RecordingCreate, RecordingStatus
-from services.database_service import DatabaseService
+#from services.database_service import DatabaseService
+from services.config_manager import ConfigManager
+from services.streaming_service import StreamingService
 
 logger = logging.getLogger(__name__)
 
-class RecordingService:
-    def __init__(self, recordings_dir: str = "recordings"):
-        self.db = DatabaseService()
+class CameraService(StreamingService):
+    def __init__(self):
+        super().__init__()
+
         self.active_recordings: Dict[str, dict] = {}  # camera_id -> recording info
-        self.recordings_dir = recordings_dir
+        self.recordings_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, os.pardir, "recordings")
         self.start_time = datetime.now()
         
         # Create recordings directory
-        os.makedirs(recordings_dir, exist_ok=True)
+        os.makedirs(self.recordings_dir, exist_ok=True)
         
         # Load existing recordings from disk
         self._load_existing_recordings()
-
+        self._camera_streams = {}
+    
+    def __del__(self):
+        # Clean up any active recordings on shutdown
+        for camera_id in list(self.active_recordings.keys()):
+            self.stop_recording(camera_id)
+        for camera_id in list(self._camera_streams.keys()):
+            self.stop_camera(camera_id)
+        
     def _load_existing_recordings(self):
         """Sync existing recording files with database"""
         if not os.path.exists(self.recordings_dir):
@@ -95,7 +106,7 @@ class RecordingService:
 
     def add_camera(self, camera_data: CameraCreate) -> Camera:
         """Add a new camera"""
-        camera_id = str(uuid.uuid4())
+        camera_id = f"{camera_data.name}_{camera_data.camera_type.value}_{int(time.time())}"
         
         # Validate camera source
         if not self._validate_camera_source(camera_data.source, camera_data.camera_type):
@@ -238,10 +249,17 @@ class RecordingService:
     
     def video_capture(self, source: int|str):
         try:
-            source_int = int(source)
-            cap = cv2.VideoCapture(source_int)
-        except ValueError:
+            source = int(source)
+        except:
+            source = str(source)
+            
+        try:
             cap = cv2.VideoCapture(source)
+            
+        except Exception as e:
+            if cap is None or not cap.isOpened():
+                logger.error(f"Failed to open video source: {source} with error: {e}")
+                logger.error(f"Check if the source is correct and accessible: {source}")
         return cap
     
     def start_camera(self, camera_id: str) -> bool:
@@ -253,15 +271,19 @@ class RecordingService:
         
         if cap.isOpened():
             ret, _ = cap.read()
-            cap.release()
             if ret:
                 self.db.update_camera(camera_id, {'status': CameraStatus.ONLINE.value})
                 logger.info(f"Started camera: {db_camera['name']} ({camera_id})")
                 camera_started = True
+                self._camera_streams[camera_id] = cap
+            else:
+                logger.warning(f"Camera {camera_id} opened but failed to read frames")
+                cap.release()
         
         if not camera_started:
             logger.warning(f"Camera: {db_camera['name']} Id: {camera_id} failed to open")
             self.db.update_camera(camera_id, {'status': CameraStatus.OFFLINE.value})
+
         return camera_started
         
     def stop_camera(self, camera_id: str):
@@ -271,24 +293,29 @@ class RecordingService:
         # Stop any active recording
         if camera_id in self.active_recordings:
             self.stop_recording(camera_id)
-        
-        # Update status
-        self.db.update_camera(camera_id, {'status': CameraStatus.OFFLINE.value})
-        logger.info(f"Stopped camera: {db_camera['name']} ({camera_id})")
 
-    def start_recording(self, camera_id: str) -> str:
-        """Start recording from a camera"""
-        db_camera = self.db.get_camera(camera_id)
-        
-        if camera_id in self.active_recordings:
-            raise ValueError(f"Camera {camera_id} is already recording")
-        
+        if camera_id in self._camera_streams:
+            cap = self._camera_streams.pop(camera_id)
+            if cap.isOpened():
+                cap.release()
+                self.db.update_camera(camera_id, {'status': CameraStatus.OFFLINE.value})
+                logger.info(f"Stopped camera: {db_camera['name']} ({camera_id})")
+            elif cap.isOpened() == False:
+                logger.warning(f"Camera {camera_id} is already stopped")
+                self.db.update_camera(camera_id, {'status': CameraStatus.OFFLINE.value})
+        else:
+            logger.warning(f"No active camera object found for id: {camera_id}")
+            return
+    
+    def init_recording(self, camera_id: str, db_camera: dict, cap: cv2.VideoCapture) -> Tuple[str, str, cv2.VideoWriter]:
         # Generate recording info
-        recording_id = str(uuid.uuid4())
         timestamp = int(time.time())
         filename = f"{camera_id}_{timestamp}.mp4"
-        file_path = os.path.join(self.recordings_dir, filename)
-        
+        recording_id = f"{camera_id}_{timestamp}"
+        file_path = os.path.join(self.recordings_dir, str(camera_id), filename)
+        if not os.path.exists(os.path.dirname(file_path)):
+            os.makedirs(os.path.dirname(file_path), exist_ok=True)
+
         # Create recording record in database
         recording_data = {
             'id': recording_id,
@@ -298,64 +325,80 @@ class RecordingService:
             'status': 'recording'
         }
         self.db.create_recording(recording_data)
-        
-        # Start recording thread
-        source = db_camera['source']
-        def record_worker(source, file_path, recording_id, camera_id):
-            cap = self.video_capture(source)
 
-            if not cap.isOpened():
-                logger.error(f"Failed to open camera {camera_id} for recording")
-                return
-            
-            # Get camera properties
-            fps = db_camera['fps']
-            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-            
-            # Setup video writer
-            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-            out = cv2.VideoWriter(file_path, fourcc, fps, (width, height))
+        # Get camera properties
+        fps = db_camera['fps']
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        
+        # Setup video writer
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        out = cv2.VideoWriter(file_path, fourcc, fps, (width, height))
+        
+        return recording_id, file_path, out
+    
+    def record_worker(self, file_path, recording_id, camera_id, cap, out, fps):
             
             start_time = time.time()
-            
-            try:
-                while camera_id in self.active_recordings:
+            while camera_id in self.active_recordings:
+                # Prefer frames already read by the streaming loop
+                lock = self.stream_locks.get(camera_id)
+                frame = None
+                if lock:
+                    with lock:
+                        frame = getattr(self, '_latest_frames', {}).get(camera_id)
+                else:
+                    frame = getattr(self, '_latest_frames', {}).get(camera_id)
+
+                if frame is None:
+                    # Fallback: read directly if no stream consumer is running
                     ret, frame = cap.read()
                     if not ret:
                         break
-                    out.write(frame)
-                    time.sleep(1.0 / fps)
-            
-            except Exception as e:
-                logger.error(f"Failed to start recording for camera {camera_id}: {e}")
-                # Clean up on failure
-                if recording_id:
-                    self.db.delete_recording(recording_id)
-                raise
+
+                # Rotate files if duration exceeds threshold (placeholder 60s)
+                if time.time() - start_time > 60:
+                    out.release()
+                    recording_id, file_path, out = self.init_recording(camera_id, self.db.get_camera(camera_id), cap)
+                    start_time = time.time()
+
+                out.write(frame)
+                time.sleep(1.0 / fps)
                     
-            finally:
-                cap.release()
-                out.release()
-                
-                # Calculate duration and file size
-                duration = int(time.time() - start_time)
-                file_size = os.path.getsize(file_path) if os.path.exists(file_path) else 0
-                
-                # Update recording in database
-                self.db.update_recording(recording_id, {
-                    'end_time': datetime.now().isoformat(),
-                    'duration': duration,
-                    'file_size': file_size,
-                    'status': 'completed'
-                })
-                
-                logger.info(f"Recording completed: {filename}")
+            
+            out.release()
+            
+            # Calculate duration and file size
+            duration = int(time.time() - start_time)
+            file_size = os.path.getsize(file_path) if os.path.exists(file_path) else 0
+            
+            # Update recording in database
+            self.db.update_recording(recording_id, {
+                'end_time': datetime.now().isoformat(),
+                'duration': duration,
+                'file_size': file_size,
+                'status': 'completed'
+            })
+
+    def start_recording(self, camera_id: str) -> str:
+        """Start recording from a camera"""
+        db_camera = self.db.get_camera(camera_id)
+        if camera_id in self.active_recordings:
+            logger.info(f"Camera {camera_id} is already recording")
+            return self.active_recordings[camera_id]['recording_id']
         
+        # Initialize camera capture if not already done
+        if camera_id not in self._camera_streams:
+            scc = self.start_camera(camera_id, db_camera)
+            if not scc:
+                return
+        else:
+            cap = self._camera_streams.get(camera_id)
+
+        recording_id, file_path, out = self.init_recording(camera_id, db_camera, cap)
         # Start recording thread
-        recording_thread = threading.Thread(target=record_worker, args=(source, file_path, recording_id, camera_id))
+        recording_thread = threading.Thread(target=self.record_worker, args=(file_path, recording_id, camera_id, cap, out, db_camera['fps']))
         recording_thread.daemon = True
-        recording_thread.start()
         
         # Track active recording
         self.active_recordings[camera_id] = {
@@ -363,11 +406,13 @@ class RecordingService:
             'thread': recording_thread,
             'start_time': datetime.now()
         }
+
+        recording_thread.start()
         
         # Update camera status
         self.db.update_camera(camera_id, {'status': CameraStatus.RECORDING.value})
         
-        logger.info(f"Started recording: {db_camera['name']} -> {filename}")
+        logger.info(f"Started recording: {db_camera['name']} -> {file_path}")
         return recording_id    
 
     def stop_recording(self, camera_id: str):
@@ -399,17 +444,24 @@ class RecordingService:
         
         recordings = []
         for db_recording in db_recordings:
+            file_path = db_recording['file_path']
+            filename = os.path.basename(file_path)
+            created_at_str = db_recording.get('created_at')
+            started_at_str = db_recording.get('start_time')
+            ended_at_str = db_recording.get('end_time')
+
             recording = Recording(
                 id=db_recording['id'],
                 camera_id=db_recording['camera_id'],
-                file_path=db_recording['file_path'],
-                start_time=datetime.fromisoformat(db_recording['start_time']),
-                duration=db_recording.get('duration', 0),
-                file_size=db_recording.get('file_size', 0),
-                status=RecordingStatus(db_recording['status'])
+                filename=filename,
+                duration=db_recording.get('duration'),
+                file_size=db_recording.get('file_size'),
+                status=RecordingStatus(db_recording['status']),
+                created_at=datetime.fromisoformat(created_at_str) if created_at_str else datetime.fromisoformat(started_at_str),
+                started_at=datetime.fromisoformat(started_at_str) if started_at_str else None,
+                ended_at=datetime.fromisoformat(ended_at_str) if ended_at_str else None,
+                file_path=file_path
             )
-            if db_recording.get('end_time'):
-                recording.end_time = datetime.fromisoformat(db_recording['end_time'])
             recordings.append(recording)
         
         return recordings
@@ -464,6 +516,15 @@ class RecordingService:
             'total_cameras': len(self.get_cameras()),
             'total_recordings': len(self.get_recordings())
         }
+
+    def get_disk_usage(self) -> float:
+        """Return disk usage percent for recordings directory."""
+        return psutil.disk_usage(self.recordings_dir).percent
+
+    def get_uptime(self) -> str:
+        """Return human-readable uptime string (HH:MM:SS)."""
+        uptime = datetime.now() - self.start_time
+        return str(uptime).split('.')[0]
 
     # Properties to maintain compatibility
     @property

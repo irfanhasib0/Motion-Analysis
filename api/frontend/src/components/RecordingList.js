@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Play, Download, Trash2, Clock, HardDrive, Camera, Search } from 'lucide-react';
 import { toast } from 'react-hot-toast';
-import { api } from '../services/api';
+import { api } from '../api';
 
 const RecordingList = ({ recordings, setRecordings, cameras }) => {
   const [selectedRecording, setSelectedRecording] = useState(null);

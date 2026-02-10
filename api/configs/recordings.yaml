@@ -1,0 +1,19 @@
+recordings:
+- id: cam-1_webcam_1770648704_1770752689
+  camera_id: cam-1_webcam_1770648704
+  file_path: /projects/Motion-Analysis/api/backend/services/../recordings/cam-1_webcam_1770648704/cam-1_webcam_1770648704_1770752689.mp4
+  start_time: '2026-02-10T19:44:49.851661'
+  status: completed
+  end_time: '2026-02-10T19:45:03.651662'
+  duration: 13
+  file_size: 552801
+  created_at: '2026-02-10T19:44:49.851730'
+- id: cam-1_webcam_1770648704_1770752863
+  camera_id: cam-1_webcam_1770648704
+  file_path: /projects/Motion-Analysis/api/backend/services/../../recordings/cam-1_webcam_1770648704/cam-1_webcam_1770648704_1770752863.mp4
+  start_time: '2026-02-10T19:47:43.349560'
+  status: completed
+  end_time: '2026-02-10T19:47:45.973863'
+  duration: 2
+  file_size: 115012
+  created_at: '2026-02-10T19:47:43.349635'

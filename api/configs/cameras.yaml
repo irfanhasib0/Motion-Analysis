@@ -1,0 +1,25 @@
+cameras:
+- id: cam-1_webcam_1770648704
+  name: cam-1
+  source: '0'
+  camera_type: webcam
+  fps: 30
+  resolution: 1920x1080
+  status: offline
+  processing_active: false
+  processing_type: null
+  processing_params: {}
+  created_at: '2026-02-09T14:51:44.754111'
+  updated_at: '2026-02-10T19:47:48.055967'
+- id: cam-1-out_webcam_1770648738
+  name: cam-1-out
+  source: '10'
+  camera_type: webcam
+  fps: 30
+  resolution: 1920x1080
+  status: offline
+  processing_active: false
+  processing_type: null
+  processing_params: {}
+  created_at: '2026-02-09T14:52:18.554151'
+  updated_at: '2026-02-09T14:52:18.554156'
