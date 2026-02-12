@@ -58,6 +58,7 @@ export const api = {
   // Streaming endpoints
   getCameraStreamUrl: (cameraId) => `${API_BASE_URL}/api/cameras/${cameraId}/stream`,
   closeCameraStream: (cameraId) => apiClient.post(`/cameras/${cameraId}/stream/close`),
+  getBlankStreamUrl: (cameraId) => `${API_BASE_URL}/api/cameras/${cameraId}/stream/blank`,
   getRecordingStreamUrl: (recordingId) => `${API_BASE_URL}/api/recordings/${recordingId}/stream`,
   // Processing endpoints
   getProcessingTypes: () => apiClient.get('/processing/types'),

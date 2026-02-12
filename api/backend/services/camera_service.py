@@ -15,6 +15,10 @@ from models.recording import Recording, RecordingCreate, RecordingStatus
 from services.config_manager import ConfigManager
 from services.streaming_service import StreamingService
 
+import sys
+sys.path.append('../../src')
+from improc.optical_flow import OpticalFlowTracker
+
 logger = logging.getLogger(__name__)
 
 class CameraService(StreamingService):
@@ -31,7 +35,8 @@ class CameraService(StreamingService):
         # Load existing recordings from disk
         self._load_existing_recordings()
         self._camera_streams = {}
-    
+        self._camera_trackers = {}
+
     def __del__(self):
         # Clean up any active recordings on shutdown
         for camera_id in list(self.active_recordings.keys()):
@@ -191,9 +196,11 @@ class CameraService(StreamingService):
                     id=updated_camera['id'],
                     name=updated_camera['name'],
                     source=updated_camera['source'],
+                    camera_type=CameraType(updated_camera.get('camera_type', 'webcam')),
                     fps=updated_camera['fps'],
                     resolution=updated_camera['resolution'],
                     status=CameraStatus(updated_camera['status']),
+                    created_at=datetime.fromisoformat(updated_camera['created_at']),
                     processing_active=updated_camera['processing_active'],
                     processing_type=updated_camera.get('processing_type'),
                     processing_params=updated_camera.get('processing_params', {})
@@ -252,10 +259,10 @@ class CameraService(StreamingService):
             source = int(source)
         except:
             source = str(source)
-            
+        
         try:
             cap = cv2.VideoCapture(source)
-            
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Reduce buffer size for lower latency
         except Exception as e:
             if cap is None or not cap.isOpened():
                 logger.error(f"Failed to open video source: {source} with error: {e}")
@@ -268,7 +275,8 @@ class CameraService(StreamingService):
         db_camera = self.db.get_camera(camera_id)
         source = db_camera['source']
         cap = self.video_capture(source)
-        
+        tracker = OpticalFlowTracker()
+
         if cap.isOpened():
             ret, _ = cap.read()
             if ret:
@@ -276,6 +284,7 @@ class CameraService(StreamingService):
                 logger.info(f"Started camera: {db_camera['name']} ({camera_id})")
                 camera_started = True
                 self._camera_streams[camera_id] = cap
+                self._camera_trackers[camera_id] = tracker
             else:
                 logger.warning(f"Camera {camera_id} opened but failed to read frames")
                 cap.release()
@@ -296,6 +305,7 @@ class CameraService(StreamingService):
 
         if camera_id in self._camera_streams:
             cap = self._camera_streams.pop(camera_id)
+            tracker = self._camera_trackers.pop(camera_id)
             if cap.isOpened():
                 cap.release()
                 self.db.update_camera(camera_id, {'status': CameraStatus.OFFLINE.value})
@@ -303,6 +313,7 @@ class CameraService(StreamingService):
             elif cap.isOpened() == False:
                 logger.warning(f"Camera {camera_id} is already stopped")
                 self.db.update_camera(camera_id, {'status': CameraStatus.OFFLINE.value})
+            del tracker
         else:
             logger.warning(f"No active camera object found for id: {camera_id}")
             return

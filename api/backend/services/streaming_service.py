@@ -72,12 +72,25 @@ class StreamingService:
         self.stream_locks: Dict[str, threading.Lock] = {}
         self.active_streams: Dict[str, bool] = {}  # Track active stream generators
         self._latest_frames: Dict[str, np.ndarray] = {}
-
+        self._latest_viz: Dict[str, np.ndarray] = {}
+        
     def generate_failure_frame(self, msg: str = "Camera Unavailable"):
         failure_frame = np.zeros((480, 640, 3), dtype=np.uint8)  # Placeholder frame for errors
-        failure_frame = cv2.putText(failure_frame, msg, (50, 240), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+        w, h = cv2.getTextSize(msg, cv2.FONT_HERSHEY_COMPLEX, 0.7, 1)[0]
+        x = (failure_frame.shape[1] - w) // 2
+        y = (failure_frame.shape[0] + h) // 2
+        failure_frame = cv2.putText(failure_frame, msg, (x, y), cv2.FONT_HERSHEY_COMPLEX, 0.7, (100, 100, 100), 1)
         failure_frame = self.frame_to_bytes(failure_frame)
         return failure_frame
+    
+    def generate_blank_image(self, msg:str = ''):
+        blank_frame = np.zeros((480, 640, 3), dtype=np.uint8)
+        w, h = cv2.getTextSize(msg, cv2.FONT_HERSHEY_COMPLEX, 0.7, 1)[0]
+        x = (blank_frame.shape[1] - w) // 2
+        y = (blank_frame.shape[0] + h) // 2
+        blank_frame = cv2.putText(blank_frame, msg, (x, y), cv2.FONT_HERSHEY_COMPLEX, 0.7, (100, 100, 100), 1)
+        ret, buffer = cv2.imencode('.jpg', blank_frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
+        return buffer.tobytes()
     
     def frame_to_bytes(self, frame) -> bytes:
         """Convert a video frame to bytes for streaming"""
@@ -99,12 +112,13 @@ class StreamingService:
         
         # Initialize camera capture if not already done
         if camera_id not in self._camera_streams:
-            scc = self.start_camera(camera_id, db_camera)
+            scc = self.start_camera(camera_id)
             if not scc:
                 return self.generate_failure_frame("Camera Failed to Start")
         
         cap = self._camera_streams.get(camera_id)
-        
+        tracker = self._camera_trackers.get(camera_id)
+
         # Get or create lock for this camera
         if camera_id not in self.stream_locks:
             self.stream_locks[camera_id] = threading.Lock()
@@ -121,13 +135,40 @@ class StreamingService:
                 self._latest_frames[camera_id] = frame
             
             # Resize frame if needed for better streaming performance
-            frame = self._resize_frame_for_streaming(frame)
+            frame  = self._resize_frame_for_streaming(frame)
+            frame, _, viz1, viz2  = tracker.detect(frame)
+            self._latest_viz[camera_id] = viz1
             buffer = self.frame_to_bytes(frame)
             
             yield buffer
             
             # Small delay to control frame rate
             time.sleep(1.0 / 30)  # 30 FPS max
+    
+    def generate_processing_stream(self, camera_id: str) -> Generator[bytes, None, None]:
+        """Generate processed video stream from camera"""
+        # Get camera from database
+        db_camera = self.db.get_camera(camera_id)
+        
+        lock = self.stream_locks.get(camera_id)
+
+        while camera_id in self._camera_trackers:
+            frame = None
+            if lock:
+                with lock:
+                    frame = getattr(self, '_latest_viz', {}).get(camera_id)
+            else:
+                frame = getattr(self, '_latest_viz', {}).get(camera_id)
+                
+                # Resize frame if needed for better streaming performance
+                processed_frame = self._resize_frame_for_streaming(frame)
+                buffer = self.frame_to_bytes(processed_frame)
+                
+                yield buffer
+                
+                # Small delay to control frame rate
+                time.sleep(1.0 / 30)  # 30 FPS max
+
 
     def generate_recording_stream(self, recording_id: str) -> Generator[bytes, None, None]:
         """Generate video stream from recorded file"""

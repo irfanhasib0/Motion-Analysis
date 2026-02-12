@@ -17,3 +17,12 @@ recordings:
   duration: 2
   file_size: 115012
   created_at: '2026-02-10T19:47:43.349635'
+- id: cam1_webcam_1770810396_1770895583
+  camera_id: cam1_webcam_1770810396
+  file_path: /projects/Motion-Analysis/api/backend/services/../../recordings/cam1_webcam_1770810396/cam1_webcam_1770810396_1770895583.mp4
+  start_time: '2026-02-12T11:26:23.264813'
+  status: completed
+  end_time: '2026-02-12T11:26:30.652619'
+  duration: 7
+  file_size: 1508117
+  created_at: '2026-02-12T11:26:23.264872'

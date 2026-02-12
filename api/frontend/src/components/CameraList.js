@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Plus, Edit, Trash2, Play, Square, Settings, Power, PowerOff } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { api } from '../api';
+import './CameraList.css';
 
 const CameraList = ({ cameras, setCameras }) => {
   console.log('CameraList component rendered with cameras:', cameras);
@@ -17,6 +18,40 @@ const CameraList = ({ cameras, setCameras }) => {
     description: '',
     location: ''
   });
+
+  // Per-camera UI settings for supporting screen
+  const [cameraSettings, setCameraSettings] = useState({}); // { [id]: { sensitivity: 'low'|'medium'|'high', supportEnabled: boolean } }
+
+  // Derive aspect ratio from resolution (e.g., "1920x1080" -> "1920 / 1080"). Fallback to 16/9.
+  const parseAspect = (resolution) => {
+    const m = /^([0-9]+)x([0-9]+)$/i.exec(resolution || '');
+    if (m) {
+      const w = parseInt(m[1], 10) || 16;
+      const h = parseInt(m[2], 10) || 9;
+      return `${w} / ${h}`;
+    }
+    return '16 / 9';
+  };
+
+  const handleSensitivityChange = (cameraId, level) => {
+    setCameraSettings(prev => ({
+      ...prev,
+      [cameraId]: {
+        ...(prev[cameraId] || { supportEnabled: false, sensitivity: 'medium' }),
+        sensitivity: level
+      }
+    }));
+  };
+
+  const handleSupportToggle = (cameraId) => {
+    setCameraSettings(prev => {
+      const cur = prev[cameraId] || { sensitivity: 'medium', supportEnabled: false };
+      return {
+        ...prev,
+        [cameraId]: { ...cur, supportEnabled: !cur.supportEnabled }
+      };
+    });
+  };
 
   const handleAddCamera = async (formData) => {
     try {
@@ -324,117 +359,152 @@ const CameraList = ({ cameras, setCameras }) => {
                 </div>
               </div>
 
-              <div className="camera-video">
-                {camera.status === 'online' || camera.status === 'recording' ? (
-                  <img
-                    key={`${camera.id}:${camera.last_seen || camera.status}`}
-                    src={`${api.getCameraStreamUrl(camera.id)}?ts=${encodeURIComponent(camera.last_seen || Date.now())}`}
-                    alt={`Camera ${camera.name}`}
-                    className="camera-stream"
-                    onLoad={(e) => {
-                      e.target.style.display = 'block';
-                      const nextSibling = e.target.nextSibling;
-                      if (nextSibling && nextSibling.style) {
-                        nextSibling.style.display = 'none';
-                      }
-                    }}
-                    onError={(e) => {
-                      e.target.style.display = 'none';
-                      const nextSibling = e.target.nextSibling;
-                      if (nextSibling && nextSibling.style) {
-                        nextSibling.style.display = 'flex';
-                      }
-                    }}
-                  />
-                ) : null}
-                {(camera.status === 'offline' || camera.status === 'error') && (
-                  <div className="camera-placeholder">
-                    <p>{camera.status === 'offline' ? 'Camera Offline' : 'Camera Error'}</p>
-                    <small>{camera.source}</small>
+              <div className="camera-video" style={{ display: 'flex', gap: '16px' }}>
+                {/* LEFT COLUMN: Primary camera with operation controls */}
+                <div className="camera-column">
+                  <div className="camera-frame" style={{ aspectRatio: parseAspect(camera.resolution) }}>
+                    {camera.status === 'online' || camera.status === 'recording' ? (
+                        <img
+                          key={`${camera.id}:${camera.last_seen || camera.status}`}
+                          src={`${api.getCameraStreamUrl(camera.id)}?ts=${encodeURIComponent(camera.last_seen || Date.now())}`}
+                          alt={`Camera ${camera.name}`}
+                          className="camera-stream"
+                          style={{ width: '100%', height: 'auto', aspectRatio: parseAspect(camera.resolution), objectFit: 'contain' }}
+                        />
+                    ) : (
+                      <img
+                          src={`${api.getBlankStreamUrl(camera.id)}`}
+                          alt={`Camera ${camera.name}`}
+                          className="camera-stream"
+                          style={{ width: '100%', height: 'auto', aspectRatio: parseAspect(camera.resolution), objectFit: 'contain' }}
+                        />
+                    )}
                   </div>
-                )}
-                {camera.processing_active && (
-                  <div className="processing-indicator">
-                    {camera.processing_type}
-                  </div>
-                )}
-              </div>
 
-              <div className="camera-controls">
-                <button 
-                  className="btn btn-warning"
-                  onClick={() => {
-                    console.log('Test button clicked for camera:', camera.id, camera.name);
-                    alert(`Camera: ${camera.name}, Status: ${camera.status}, ID: ${camera.id}`);
-                  }}
-                  style={{ marginRight: '8px' }}
-                >
-                  Test Click
-                </button>
-                
-                {camera.status === 'offline' || camera.status === 'error' ? (
-                  <button 
-                    className="btn btn-success"
-                    onClick={() => handleStartCamera(camera.id)}
-                  >
-                    <Power size={14} />
-                    Start
-                  </button>
-                ) : (
-                  <button 
-                    className="btn btn-secondary"
-                    onClick={() => handleStopCamera(camera.id)}
-                    disabled={camera.status === 'recording'}
-                  >
-                    <PowerOff size={14} />
-                    Stop
-                  </button>
-                )}
-                
-                {camera.status === 'recording' ? (
-                  <button 
-                    className="btn btn-danger"
-                    onClick={() => handleStopRecording(camera.id)}
-                  >
-                    <Square size={14} />
-                    Stop Rec
-                  </button>
-                ) : (
-                  <button 
-                    className="btn btn-success"
-                    onClick={() => {
-                      console.log('Record button clicked! Camera status:', camera.status, 'ID:', camera.id);
-                      /*alert('Record button clicked! Check console now.');*/
-                      handleStartRecording(camera.id);
-                    }}
-                    disabled={camera.status !== 'online'}
-                    title={camera.status !== 'online' ? `Camera must be online to record (current: ${camera.status})` : 'Start recording'}
-                  >
-                    <Play size={14} />
-                    Record {camera.status !== 'online' ? '(Disabled)' : ''}
-                  </button>
-                )}
-                
-                <button 
-                  className="btn btn-primary"
-                  onClick={() => setEditingCamera(camera)}
-                >
-                  <Edit size={14} />
-                  Edit
-                </button>
-                
-                <button 
-                  className="btn btn-danger"
-                  onClick={() => handleDeleteCamera(camera.id)}
-                >
-                  <Trash2 size={14} />
-                  Delete
-                </button>
+                  {/* Camera operation controls below left camera */}
+                  <div className="camera-controls-card">
+                    <button 
+                      className="btn btn-warning"
+                      onClick={() => {
+                        console.log('Test button clicked for camera:', camera.id, camera.name);
+                        alert(`Camera: ${camera.name}, Status: ${camera.status}, ID: ${camera.id}`);
+                      }}
+                    >
+                      Test Click
+                    </button>
+                    
+                    {camera.status === 'offline' || camera.status === 'error' ? (
+                      <button 
+                        className="btn btn-success"
+                        onClick={() => handleStartCamera(camera.id)}
+                      >
+                        <Power size={14} />
+                        Start
+                      </button>
+                    ) : (
+                      <button 
+                        className="btn btn-secondary"
+                        onClick={() => handleStopCamera(camera.id)}
+                        disabled={camera.status === 'recording'}
+                      >
+                        <PowerOff size={14} />
+                        Stop
+                      </button>
+                    )}
+                    
+                    {camera.status === 'recording' ? (
+                      <button 
+                        className="btn btn-danger"
+                        onClick={() => handleStopRecording(camera.id)}
+                      >
+                        <Square size={14} />
+                        Stop Rec
+                      </button>
+                    ) : (
+                      <button 
+                        className="btn btn-success"
+                        onClick={() => {
+                          console.log('Record button clicked! Camera status:', camera.status, 'ID:', camera.id);
+                          handleStartRecording(camera.id);
+                        }}
+                        disabled={camera.status !== 'online'}
+                        title={camera.status !== 'online' ? `Camera must be online to record (current: ${camera.status})` : 'Start recording'}
+                      >
+                        <Play size={14} />
+                        Record {camera.status !== 'online' ? '(Disabled)' : ''}
+                      </button>
+                    )}
+                    
+                    <button 
+                      className="btn btn-primary"
+                      onClick={() => setEditingCamera(camera)}
+                    >
+                      <Edit size={14} />
+                      Edit
+                    </button>
+                    
+                    <button 
+                      className="btn btn-danger"
+                      onClick={() => handleDeleteCamera(camera.id)}
+                    >
+                      <Trash2 size={14} />
+                      Delete
+                    </button>
+                  </div>
+                </div>
+
+                {/* RIGHT COLUMN: Support view with view controls */}
+                <div className="camera-column">
+                  <div className="camera-frame" style={{ aspectRatio: parseAspect(camera.resolution) }}>
+                    {(camera.status === 'online' || camera.status === 'recording') ? (
+                        <img
+                          key={`${camera.id}:support:${camera.last_seen || camera.status}`}
+                          src={`${api.getCameraStreamUrl(camera.id)}?view=support&ts=${encodeURIComponent(camera.last_seen || Date.now())}`}
+                          alt={`Support view for ${camera.name}`}
+                          className="camera-stream"
+                          style={{ width: '100%', height: 'auto', aspectRatio: parseAspect(camera.resolution), objectFit: 'contain' }}
+                        />):( 
+                        <img
+                          src={`${api.getBlankStreamUrl(camera.id)}`}
+                          alt={`Camera ${camera.name}`}
+                          className="camera-stream"
+                          style={{ width: '100%', height: 'auto', aspectRatio: parseAspect(camera.resolution), objectFit: 'contain' }}
+                        />)}
+                  </div>
+
+                  {/* View controls below right camera */}
+                  <div className="view-controls-card">
+                    <div className="sensitivity-group">
+                      <span className="sensitivity-label">Sensitivity:</span>
+                      {['low','medium','high'].map(level => (
+                        <label 
+                          key={level} 
+                          className={`sensitivity-option ${(cameraSettings[camera.id]?.sensitivity || 'medium') === level ? 'active' : ''}`}
+                        >
+                          <input
+                            type="radio"
+                            name={`sens-${camera.id}`}
+                            value={level}
+                            checked={(cameraSettings[camera.id]?.sensitivity || 'medium') === level}
+                            onChange={() => handleSensitivityChange(camera.id, level)}
+                          />
+                          <span className="sensitivity-option-text">{level}</span>
+                        </label>
+                      ))}
+                    </div>
+                    <button
+                      className="btn btn-outline support-toggle-btn"
+                      onClick={() => handleSupportToggle(camera.id)}
+                    >
+                      {(cameraSettings[camera.id]?.supportEnabled ?? true) ? 'Disable' : 'Enable'}
+                    </button>
+                  </div>
+                </div>
               </div>
             </div>
-            );
+          );
           })}
-          
+
           {cameras.length === 0 && (
             <div className="camera-card">
               <div className="camera-video">

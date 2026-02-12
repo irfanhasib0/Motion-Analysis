@@ -1,5 +1,5 @@
 from fastapi import FastAPI, HTTPException, BackgroundTasks, WebSocket, WebSocketDisconnect
-from fastapi.responses import StreamingResponse, FileResponse
+from fastapi.responses import Response, StreamingResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -11,7 +11,6 @@ from datetime import datetime
 import logging
 
 from services.camera_service import CameraService
-from services.processing_service import ProcessingService
 from models.camera import Camera, CameraCreate, CameraUpdate
 from models.recording import Recording, RecordingCreate
 
@@ -32,7 +31,6 @@ app.add_middleware(
 
 # Initialize services
 camera_service = CameraService()
-processing_service = ProcessingService()
 
 # Mount static files for React app only if build directory exists
 frontend_build_path = "frontend/build"
@@ -254,6 +252,18 @@ async def close_camera_stream(camera_id: str):
         logger.error(f"Failed to close camera stream: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/api/cameras/{camera_id}/stream/blank")
+async def get_blank_stream(camera_id: str):
+    """Stream a blank video"""
+    try:
+        return Response(
+            camera_service.generate_blank_image(str(camera_id)),
+            media_type="image/jpeg"
+        )
+    except Exception as e:
+        logger.error(f"Failed to get blank stream: {e}")
+        raise HTTPException(status_code=404, detail=str(e))
+    
 @app.get("/api/recordings/{recording_id}/stream")
 async def get_recording_stream(recording_id: str):
     """Stream a recorded video"""
@@ -282,52 +292,6 @@ async def download_recording(recording_id: str):
     except Exception as e:
         logger.error(f"Failed to download recording: {e}")
         raise HTTPException(status_code=404, detail=str(e))
-
-# Processing endpoints
-@app.get("/api/processing/types")
-async def get_processing_types():
-    """Get available video processing types"""
-    return processing_service.get_available_processors()
-
-@app.post("/api/cameras/{camera_id}/processing/{processor_type}/start")
-async def start_processing(camera_id: str, processor_type: str, params: dict = None):
-    """Start custom processing on camera stream"""
-    try:
-        await processing_service.start_processing(camera_id, processor_type, params)
-        await broadcast_message({
-            "type": "processing_started",
-            "camera_id": camera_id,
-            "processor_type": processor_type
-        })
-        return {"message": f"Started {processor_type} processing on camera {camera_id}"}
-    except Exception as e:
-        logger.error(f"Failed to start processing: {e}")
-        raise HTTPException(status_code=400, detail=str(e))
-
-@app.post("/api/cameras/{camera_id}/processing/stop")
-async def stop_processing(camera_id: str):
-    """Stop custom processing on camera stream"""
-    try:
-        processing_service.stop_processing(camera_id)
-        await broadcast_message({
-            "type": "processing_stopped",
-            "camera_id": camera_id
-        })
-        return {"message": f"Stopped processing on camera {camera_id}"}
-    except Exception as e:
-        logger.error(f"Failed to stop processing: {e}")
-        raise HTTPException(status_code=400, detail=str(e))
-
-@app.get("/api/system/info")
-async def get_system_info():
-    """Get system information and camera status"""
-    return {
-        "cameras": camera_service.get_camera_status(),
-        "recordings": len(camera_service.get_recordings()),
-        "processing_active": processing_service.get_active_processors(),
-        "disk_usage": camera_service.get_disk_usage(),
-        "uptime": camera_service.get_uptime()
-    }
 
 # Serve React app
 @app.get("/")
