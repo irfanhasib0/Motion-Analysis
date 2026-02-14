@@ -4,17 +4,17 @@ from collections import deque, defaultdict
 from matplotlib import pyplot as plt
 
 class FlowMemory:
-    def __init__(self, maxpid=25, min_traj_len=3):
+    def __init__(self, maxpid=25, min_traj_len=3, max_traj_len=150, keep_last_seen = 90):
         self.motion_trajs  = defaultdict(lambda: np.ndarray(shape=(0,2), dtype=np.float32))
-        self.motion_queue  = defaultdict(lambda: np.ndarray(shape=(0,2), dtype=np.float32))
-        self.vel_trajs     = defaultdict(lambda: np.ndarray(shape=(0,2), dtype=np.float32))
-        self.accl_trajs    = defaultdict(lambda: np.ndarray(shape=(0,2), dtype=np.float32))
+        self.motion_queue  = defaultdict(lambda: deque(maxlen=max_traj_len))
+        self.pid_hist      = {}  # pid -> {'total_seen': int, 'last_seen': int}
 
         self.traj_len = {}
         self.maxpid = maxpid
         self.maxkpid = 6  # fixed for now
         self.rolling_win = 1
         self.min_traj_len = min_traj_len
+        self.keep_last_seen = keep_last_seen
 
     def fill_neg1(self,a):
         a = a.astype(float)
@@ -31,35 +31,44 @@ class FlowMemory:
        return filled
 
     def add(self, pts):
+        for pid in self.pid_hist.keys():
+            self.pid_hist[pid]['last_seen'] += 1
+
         for pid in pts.keys():
             pid = pid % self.maxpid
+            if pid not in self.pid_hist:
+                self.pid_hist[pid] = {'last_seen': 0, 'total_seen': 0}
+            self.pid_hist[pid]['last_seen']   = 0
+            self.pid_hist[pid]['total_seen'] += 1
             for kpid in range(len(pts[pid]['keypoints_1'])):
                 curr_pts = pts[pid]['keypoints_1'][kpid].reshape(1,2)
-                if curr_pts[0][0] < 0 or curr_pts[0][1] < 0:
-                    continue
-                self.motion_queue[f'{pid}|{kpid}'] = np.concatenate((self.motion_queue[f'{pid}|{kpid}'], curr_pts))
-                traj = self.motion_queue[f'{pid}|{kpid}']
-
-                if traj[-1][0] != -1 and -1 in traj[-5:, 0]:
-                   print('before fill:', traj[-5:])
-                   traj[-5:] = self.fill_array_neg1(traj[-5:])
-                   self.motion_queue[f'{pid}|{kpid}'][-5:] = traj[-5:]
-                   print('after fill:', traj[-5:])
-
+                
+                self.motion_queue[f'{pid}|{kpid}'].append(list(curr_pts[0]))
+                traj = np.array(self.motion_queue[f'{pid}|{kpid}'])
+                
                 if traj.shape[0] >= self.min_traj_len:
                     kernel = np.ones(self.rolling_win) / self.rolling_win
                     smoothed_x = np.convolve(traj[:, 0], kernel, mode='same')
                     smoothed_y = np.convolve(traj[:, 1], kernel, mode='same')
                     self.motion_trajs[f'{pid}|{kpid}'] = np.column_stack((smoothed_x, smoothed_y))
                     self.traj_len[f'{pid}|{kpid}'] = traj.shape[0]
-                    #self.vel_trajs[f'{pid}|{kpid}'] = self.get_traj_velocities(traj= self.motion_trajs[f'{pid}|{kpid}'])
-                    #self.accl_trajs[f'{pid}|{kpid}'] = self.get_traj_velocities(traj= self.vel_trajs[f'{pid}|{kpid}'])
     
-    def get_sorted_traj_ids(self, curr_pids = []):
-        sorted_ids = sorted(self.traj_len.keys(), key=lambda x: self.traj_len[x], reverse=True)
-        if len(curr_pids) > 0:
-            sorted_ids = [tid for tid in sorted_ids if int(tid.split('|')[0]) in curr_pids]
-        return sorted_ids
+    def get_sorted_traj_ids(self, curr_pids = [], num_of_kpts = 5):
+        _ids = sorted(self.traj_len.keys(), key=lambda x: self.traj_len[x], reverse=True)
+        if len(curr_pids) == 0:
+            return sorted(_ids[:num_of_kpts]) # sort alphabetically for consistency
+        sorted_ids =  []
+        extra_sorted_ids = []
+        for tid in _ids:
+            pid = int(tid.split('|')[0])
+            if pid in curr_pids:
+                sorted_ids.append(tid)
+            else:
+                if self.pid_hist[pid]['last_seen'] <= self.keep_last_seen:  # recently seen, keep as extra candidate
+                    extra_sorted_ids.append(tid)
+        if len(sorted_ids) < num_of_kpts:
+            sorted_ids += extra_sorted_ids[:num_of_kpts - len(sorted_ids)]
+        return sorted(sorted_ids) # sort alphabetically for consistency
     
     def get_traj_velocities(self, traj_id = None, traj = None):
         if traj is None:

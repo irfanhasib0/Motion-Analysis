@@ -50,7 +50,7 @@ class ConfigManager:
     def _ensure_camera_defaults(self, cam: Dict[str, Any]) -> Dict[str, Any]:
         cam.setdefault("camera_type", "webcam")
         cam.setdefault("fps", 30)
-        cam.setdefault("resolution", "1920x1080")
+        cam.setdefault("resolution", "640x480")
         cam.setdefault("status", "offline")
         cam.setdefault("processing_active", False)
         cam.setdefault("processing_type", None)

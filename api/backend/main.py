@@ -242,6 +242,18 @@ async def get_camera_stream(camera_id: str):
         logger.error(f"Failed to get camera stream: {e}")
         raise HTTPException(status_code=404, detail=str(e))
 
+@app.get("/api/cameras/{camera_id}/processing_stream")
+async def get_processing_stream(camera_id: str):
+    """Get processed video stream from camera"""
+    try:
+        return StreamingResponse(
+            camera_service.generate_processing_stream(camera_id),
+            media_type="multipart/x-mixed-replace; boundary=frame"
+        )
+    except Exception as e:
+        logger.error(f"Failed to get processed camera stream: {e}")
+        raise HTTPException(status_code=404, detail=str(e))
+    
 @app.post("/api/cameras/{camera_id}/stream/close")
 async def close_camera_stream(camera_id: str):
     """Close camera stream to free resources"""

@@ -46,23 +46,31 @@ import motionflow_cpp
 MOTIONFLOW_CPP_AVAILABLE = False
 '''
 class OpticalFlowTracker:
-    def __init__(self, max_traj_len = 100, max_pid=2500, coreset_k =2, matcher_mode="hungarian", det_method="fast"):
+    def __init__(self, 
+                 min_traj_len=10,
+                 max_traj_len = 100, 
+                 max_pid=2500, 
+                 coreset_k =2, 
+                 matcher_mode="hungarian", 
+                 det_method="fast"):
+        
         self.prev_gray = None
         self.prev_pts  = None
         self.mask      = None
         self.viz_pos   = None
         self.viz_vel   = None
-        self.fg_mask   = None
+        self.fg_mask   = 0
         
         self.det_method = det_method  # 'fast', 'accurate'
         self.kpt_det_freq = 1
         self.bg_min_bbox_area = 500
         self.bg_min_pix_thr = 200
-        self.bg_mask_dilate_ksize = (0, 0)
+        self.bg_mask_dilate_ksize = (3, 3)
         self.bg_hist = 50
         self.mtc_max_cost_thr = 50
         self.kpt_max_kpts = 5
         self.kpt_det_idx = 1  # 0: FAST, 1: SIFT, 2: ORB, 3: GFTT
+        self.num_traj_viz = 5  # Number of trajectories to visualize
 
         colors = [
         (0, 255, 0), (255, 0, 0), (0, 0, 255), (255, 255, 0),
@@ -92,7 +100,7 @@ class OpticalFlowTracker:
         #self.tracker  = ByteTracker()
 
         self.matcher_mode = matcher_mode  # 'hungarian' (robust) or 'greedy' (faster, C++ accelerated)
-        self.memory = FlowMemory(maxpid=max_pid, min_traj_len=10)
+        self.memory = FlowMemory(maxpid=max_pid, min_traj_len=min_traj_len, max_traj_len=max_traj_len)
         # Coreset memory (PatchCore-like) for representative motion trajectories
         self.coreset = CoresetMemory(sample_len=max_traj_len, max_items=max_traj_len)
         self.coreset_k = coreset_k
@@ -128,10 +136,21 @@ class OpticalFlowTracker:
             return rgb
     
     def _detect_forground_bboxes(self, gray):
-        self.fg_mask = self.bgsub.apply(gray)
+        prev_fg_mask = deepcopy(self.fg_mask)
+        self.fg_mask = np.uint8(0.5 * self.fg_mask) + np.uint8(0.5 * self.bgsub.apply(gray))
+        if type(prev_fg_mask) == int:
+            prev_fg_mask = self.fg_mask.copy()
+        diff_mask    = np.abs(self.fg_mask - prev_fg_mask)
+        diff_mask = diff_mask[diff_mask > 0]
+        if len(diff_mask) > 0:
+            self.bg_diff = np.mean(diff_mask)
+        else:
+            self.bg_diff = 0
+        
         if self.bg_mask_dilate_ksize[0] > 1:
             kernel       = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, self.bg_mask_dilate_ksize)
             #self.fg_mask = cv2.morphologyEx(self.fg_mask, cv2.MORPH_OPEN, kernel, iterations=3)
+            self.fg_mask = cv2.erode(self.fg_mask, kernel, iterations=1)
             self.fg_mask = cv2.dilate(self.fg_mask, kernel, iterations=1)
         
         self.fg_mask[self.fg_mask > self.bg_min_pix_thr] = 255
@@ -301,7 +320,7 @@ class OpticalFlowTracker:
         if self.prev_gray is None:
             self.prev_pts  = self._detect_pts(gray, det_feat_pts= not (self.det_method == 'fast'))
             self.prev_gray = gray
-            self.viz_div_h = int(gray.shape[0] // 5)
+            self.viz_div_h = int(gray.shape[0] // (self.num_traj_viz+1))
             self.viz_div_w = int(gray.shape[1])
             return frame, {}, frame, frame
         
@@ -316,34 +335,37 @@ class OpticalFlowTracker:
         self.prev_gray = gray
 
         # Visualization
-        viz_frame = self._draw_pts_flow(frame, self.prev_pts)
         self.memory._viz_pos = None
         self.memory._viz_vel = None
         pts = deepcopy(self.prev_pts)
         self.memory.add(pts)
-        sorted_ids = self.memory.get_sorted_traj_ids(curr_pids=pts.keys())
-        plot_array = viz_frame *0
-        
-        for _ch,_id in enumerate(sorted_ids[:5]):
+        sorted_ids = self.memory.get_sorted_traj_ids(curr_pids=pts.keys(), num_of_kpts=self.num_traj_viz)
+        viz_frame = self._draw_pts_flow(frame, self.prev_pts)
+        plot_array = frame *0
+        for _ch,_id in enumerate(sorted_ids):
             _ch += 1
             vel = 0.1*self.memory.get_traj_velocities(traj_id=_id)#[-200:]
             if len(vel) > 0:
-                points = np.array([[i, self.viz_div_h*_ch + 3*v] for i, v in enumerate(vel)], dtype=np.int32)
+                points = np.array([[i + 300, self.viz_div_h*_ch + 3*v] for i, v in enumerate(vel)], dtype=np.int32)
                 
                 points = points.reshape((-1, 1, 2))  # Reshape for cv2.polylines
                 points = points[-self.viz_div_w:]  # Keep only the last 'viz_div_w' points
+
+                y_pos = self.viz_div_h*_ch
                 cv2.line(plot_array, 
-                        (0, self.viz_div_h*_ch), (plot_array.shape[1], self.viz_div_h*_ch),  
+                        (0, y_pos), (plot_array.shape[1], y_pos),  
                         (150, 150, 150), 1)
                 cv2.polylines(plot_array,
                              pts=[points],
                              isClosed=False,
                              color=self.colors[_ch],
                              thickness=2)
-                cv2.putText(plot_array, f'id: {_id}',
-                            (points[0][0][0], points[0][0][1] - 10),
-                            cv2.FONT_HERSHEY_SIMPLEX, 1.0, self.colors[_ch], 2)
-                
+                y_pos = y_pos - self.viz_div_h + 25
+                for elem in [f'id: {_id}', f'vel: {vel.mean():.2f} diff: {int(self.bg_diff)}']:
+                    cv2.putText(plot_array, elem,
+                                (10, y_pos),
+                                cv2.FONT_HERSHEY_SIMPLEX, 1.0, self.colors[_ch], 2)
+                    y_pos += 25
         
         # Snapshot full-length trajectories into coreset when available
         self.coreset.add_n_traj(self.memory.motion_trajs)
@@ -394,6 +416,8 @@ class OpticalFlowTracker:
     def _draw_pts_flow(self, frame, _pts):
         viz_frame = frame.copy()
         for i in _pts.keys():
+            if self.memory.pid_hist[i]['total_seen'] < 3:
+                continue
             good_new = _pts[i]['keypoints_2']
             good_old = _pts[i]['keypoints_1']
             

@@ -1,6 +1,8 @@
 import cv2
+import numpy as np
 import os
 import asyncio
+import subprocess
 import threading
 import time
 import uuid
@@ -20,6 +22,114 @@ sys.path.append('../../src')
 from improc.optical_flow import OpticalFlowTracker
 
 logger = logging.getLogger(__name__)
+
+class Capture:
+    def __init__(self, source:str|int, width:int =640, height:int =480, fps:int =30):
+        self.source = source
+        self.cam_type = None
+        self.width = width
+        self.height = height
+        self.fps = fps
+        self.cap = None
+        
+        try:
+            source = int(source)
+        except:
+            source = str(source)
+
+        if isinstance(source, str) and source.startswith(('rtsp://', 'rtmp://')):
+            self.cam_type = 'rtsp'
+            self.open_rtsp()
+        elif isinstance(source, str) and source.startswith(('http://', 'https://')):
+            self.cam_type = 'http'
+            self.open_rtsp()  # For simplicity, treat HTTP sources as RTSP for now
+        elif type(source) == int or (isinstance(source, str) and source.split('.')[-1] in ['mp4', 'avi', 'mkv', 'mov']):
+            self.cam_type = 'webcam'
+            self.open_wcam()
+        else:
+            raise ValueError(f"Unsupported camera source: {source}")
+
+    def open_wcam(self):
+        self.cap = cv2.VideoCapture(self.source)
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
+        self.cap.set(cv2.CAP_PROP_FPS, self.fps)
+        return self
+    
+    def open_rtsp(self, ):
+        cmd = [
+            "ffmpeg",
+            "-rtsp_transport", "tcp",
+            "-fflags", "nobuffer",
+            "-flags", "low_delay",
+            "-analyzeduration", "1000000",
+            "-probesize", "1000000",
+            "-i", self.source,
+            "-an",                    # no audio
+            "-vf", f"fps={self.fps},scale={self.width}:{self.height}",
+            "-pix_fmt", "bgr24",      # 8-bit BGR format
+            "-f", "rawvideo",
+            "pipe:1"
+        ]
+        try:
+            self.cap = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=10**8)
+        except Exception as e:
+            logger.error(f"Failed to open RTSP stream: {e}")
+        return self
+    
+    def is_opened(self):
+        if self.cam_type == 'webcam':
+            return self.cap and self.cap.isOpened()
+        elif self.cam_type in ['rtsp', 'http']:
+            return self.cap and self.cap.poll() is None
+        return False
+    
+    def read_wcam(self):
+        if self.cap and self.cap.isOpened():
+            return self.cap.read()
+        return False, None
+    
+    def read_rtsp(self):
+        if self.cap:
+            frame_size = self.width * self.height * 3  # Assuming default resolution for now
+            raw = self.cap.stdout.read(frame_size)
+            if len(raw) == frame_size:
+                frame = np.frombuffer(raw, np.uint8).reshape((self.height, self.width, 3))
+                return True, frame
+        return False, None
+
+    def release_wcam(self):
+        if self.cap:
+            self.cap.release()
+            self.cap = None
+
+    def release_rtsp(self):
+        if self.cap:
+            self.cap.terminate()
+            self.cap = None
+            
+    def open(self):
+        if self.cam_type == 'rtsp':
+            return self.open_rtsp()
+        elif self.cam_type == 'webcam':
+            return self.open_wcam()
+    
+    def read(self):
+        if self.cam_type == 'rtsp':
+            return self.read_rtsp()
+        elif self.cam_type == 'webcam':
+            return self.read_wcam()
+        else:
+            raise ValueError(f"Unsupported camera type: {self.cam_type}")
+        
+    def release(self):
+        if self.cam_type == 'rtsp':
+            self.release_rtsp()
+        elif self.cam_type == 'webcam':
+            self.release_wcam()
+        else:
+            raise ValueError(f"Unsupported camera type: {self.cam_type}")
+        
 
 class CameraService(StreamingService):
     def __init__(self):
@@ -183,10 +293,10 @@ class CameraService(StreamingService):
         if 'resolution' in update_data:
             update_dict['resolution'] = update_data['resolution']
         
-        # Validate source if updated
-        if 'source' in update_dict:
-            if not self._validate_camera_source(update_dict['source'], camera_update.camera_type or CameraType.WEBCAM):
-                raise ValueError(f"Invalid camera source: {update_dict['source']}")
+        ## Validate source if updated
+        #if 'source' in update_dict:
+        #    if not self._validate_camera_source(update_dict['source'], camera_update.camera_type or CameraType.WEBCAM):
+        #        raise ValueError(f"Invalid camera source: {update_dict['source']}")
         
         # Update in database
         if update_dict:
@@ -222,75 +332,53 @@ class CameraService(StreamingService):
         camera_name = db_camera['name']
         self.db.delete_camera(camera_id)
         logger.info(f"Removed camera: {camera_name} ({camera_id})")
-
-    def _validate_camera_source(self, source: str, camera_type: CameraType) -> bool:
-        """Validate camera source based on type"""
-        if camera_type == CameraType.WEBCAM:
-            try:
-                index = int(source)
-                return index >= 0
-            except ValueError:
-                return False
-        elif camera_type == CameraType.RTSP:
-            return source.startswith(('rtsp://', 'rtmp://'))
-        elif camera_type == CameraType.IP_CAMERA:
-            return source.startswith(('http://', 'https://'))
-        return False
-
-    def _test_camera_connection(self, camera_id: str) -> bool:
-        """Test camera connection"""
-        db_camera = self.db.get_camera(camera_id)
-        if not db_camera:
-            return False
-            
-        try:
-            cap = self.video_capture(db_camera['source'])
-            if cap.isOpened():
-                ret, _ = cap.read()
-                cap.release()
-                return ret
-        except Exception as e:
-            logger.error(f"Camera test failed for {camera_id}: {e}")
-        
-        return False
     
-    def video_capture(self, source: int|str):
+    def video_capture(self, camera_id: str):
+        db_camera = self.db.get_camera(camera_id)
+        source = db_camera['source']
+        
         try:
             source = int(source)
         except:
             source = str(source)
         
+        resolution = [int(res) for res in db_camera['resolution'].split('x')]
+        fps = db_camera['fps']
+        
+        cap = None
         try:
-            cap = cv2.VideoCapture(source)
-            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Reduce buffer size for lower latency
+            cap = Capture(source, width=resolution[0], height=resolution[1], fps=fps)    
         except Exception as e:
-            if cap is None or not cap.isOpened():
-                logger.error(f"Failed to open video source: {source} with error: {e}")
-                logger.error(f"Check if the source is correct and accessible: {source}")
+            logger.error(f"Failed to open video source: {source} with error: {e}")
+            logger.error(f"Check if the source is correct and accessible: {source}")
         return cap
     
     def start_camera(self, camera_id: str) -> bool:
         """Start a camera"""
         camera_started = False
-        db_camera = self.db.get_camera(camera_id)
-        source = db_camera['source']
-        cap = self.video_capture(source)
+        cap = self.video_capture(camera_id)
+        
+        if cap is None:
+            logger.warning(f"Camera: {self.db.get_camera(camera_id)['name']} Id: {camera_id} failed to open")
+            self.db.update_camera(camera_id, {'status': CameraStatus.OFFLINE.value})
+            return False
+            
         tracker = OpticalFlowTracker()
-
-        if cap.isOpened():
-            ret, _ = cap.read()
-            if ret:
-                self.db.update_camera(camera_id, {'status': CameraStatus.ONLINE.value})
-                logger.info(f"Started camera: {db_camera['name']} ({camera_id})")
-                camera_started = True
-                self._camera_streams[camera_id] = cap
-                self._camera_trackers[camera_id] = tracker
-            else:
-                logger.warning(f"Camera {camera_id} opened but failed to read frames")
-                cap.release()
+        
+        ret, _ = cap.read()
+            
+        if ret:
+            self.db.update_camera(camera_id, {'status': CameraStatus.ONLINE.value})
+            logger.info(f"Started camera: {self.db.get_camera(camera_id)['name']} ({camera_id})")
+            camera_started = True
+            self._camera_streams[camera_id] = cap
+            self._camera_trackers[camera_id] = tracker
+        else:
+            logger.warning(f"Camera {camera_id} opened but failed to read frames")
+            cap.release()
         
         if not camera_started:
-            logger.warning(f"Camera: {db_camera['name']} Id: {camera_id} failed to open")
+            logger.warning(f"Camera: {self.db.get_camera(camera_id)['name']} Id: {camera_id} failed to open")
             self.db.update_camera(camera_id, {'status': CameraStatus.OFFLINE.value})
 
         return camera_started
@@ -306,13 +394,10 @@ class CameraService(StreamingService):
         if camera_id in self._camera_streams:
             cap = self._camera_streams.pop(camera_id)
             tracker = self._camera_trackers.pop(camera_id)
-            if cap.isOpened():
-                cap.release()
-                self.db.update_camera(camera_id, {'status': CameraStatus.OFFLINE.value})
-                logger.info(f"Stopped camera: {db_camera['name']} ({camera_id})")
-            elif cap.isOpened() == False:
-                logger.warning(f"Camera {camera_id} is already stopped")
-                self.db.update_camera(camera_id, {'status': CameraStatus.OFFLINE.value})
+            cap.release()
+            self.db.update_camera(camera_id, {'status': CameraStatus.OFFLINE.value})
+            logger.info(f"Stopped camera: {db_camera['name']} ({camera_id})")
+            
             del tracker
         else:
             logger.warning(f"No active camera object found for id: {camera_id}")

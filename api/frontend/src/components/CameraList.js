@@ -362,7 +362,7 @@ const CameraList = ({ cameras, setCameras }) => {
               <div className="camera-video" style={{ display: 'flex', gap: '16px' }}>
                 {/* LEFT COLUMN: Primary camera with operation controls */}
                 <div className="camera-column">
-                  <div className="camera-frame" style={{ aspectRatio: parseAspect(camera.resolution) }}>
+                  <div className="camera-frame">
                     {camera.status === 'online' || camera.status === 'recording' ? (
                         <img
                           key={`${camera.id}:${camera.last_seen || camera.status}`}
@@ -455,11 +455,11 @@ const CameraList = ({ cameras, setCameras }) => {
 
                 {/* RIGHT COLUMN: Support view with view controls */}
                 <div className="camera-column">
-                  <div className="camera-frame" style={{ aspectRatio: parseAspect(camera.resolution) }}>
+                  <div className="camera-frame">
                     {(camera.status === 'online' || camera.status === 'recording') ? (
                         <img
                           key={`${camera.id}:support:${camera.last_seen || camera.status}`}
-                          src={`${api.getCameraStreamUrl(camera.id)}?view=support&ts=${encodeURIComponent(camera.last_seen || Date.now())}`}
+                          src={`${api.getProcessingStreamUrl(camera.id)}?view=support&ts=${encodeURIComponent(camera.last_seen || Date.now())}`}
                           alt={`Support view for ${camera.name}`}
                           className="camera-stream"
                           style={{ width: '100%', height: 'auto', aspectRatio: parseAspect(camera.resolution), objectFit: 'contain' }}

@@ -161,7 +161,7 @@ function App() {
             />
             <Route 
               path="/live" 
-              element={<LiveView cameras={cameras} />} 
+              element={<LiveView cameras={cameras} recordings={recordings} />} 
             />
             <Route 
               path="/recordings" 

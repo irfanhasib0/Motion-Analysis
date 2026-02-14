@@ -10,7 +10,7 @@ cameras:
   processing_type: null
   processing_params: {}
   created_at: '2026-02-12T17:34:42.774322'
-  updated_at: '2026-02-12T21:02:46.519131'
+  updated_at: '2026-02-14T20:36:24.262170'
 - id: cam-2_webcam_1770921408
   name: cam-2
   source: '0'
@@ -22,4 +22,4 @@ cameras:
   processing_type: null
   processing_params: {}
   created_at: '2026-02-12T18:36:48.156743'
-  updated_at: '2026-02-12T19:36:01.616355'
+  updated_at: '2026-02-14T19:48:37.881113'

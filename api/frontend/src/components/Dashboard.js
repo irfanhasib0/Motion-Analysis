@@ -1,5 +1,6 @@
 import React from 'react';
 import { Camera, Video, HardDrive, Clock } from 'lucide-react';
+import './Dashboard.css';
 
 const Dashboard = ({ cameras, recordings, systemInfo }) => {
   const onlineCameras = cameras.filter(c => c.status === 'online').length;
@@ -96,53 +97,51 @@ const Dashboard = ({ cameras, recordings, systemInfo }) => {
           <h2 className="section-title">Camera Status</h2>
         </div>
         
-        <div className="camera-grid">
+        <div className="camera-info-grid">
           {cameras.map(camera => (
-            <div key={camera.id} className="camera-card">
-              <div className="camera-header">
-                <div className="camera-title">{camera.name}</div>
-                <div className="camera-info">
+            <div key={camera.id} className="camera-info-card">
+              <div className="camera-info-header">
+                <div className="camera-icon-wrapper">
+                  <Camera size={32} />
+                </div>
+                <div className="camera-details">
+                  <div className="camera-name">{camera.name}</div>
                   <span className={`status status-${camera.status}`}>
                     {camera.status}
                   </span>
-                  <span>{camera.resolution || 'Unknown'}</span>
-                  <span>{camera.camera_type}</span>
                 </div>
               </div>
               
-              <div className="camera-video">
-                {camera.status === 'online' || camera.status === 'recording' ? (
-                  <img 
-                    src={`/api/cameras/${camera.id}/stream`}
-                    alt={`Camera ${camera.name}`}
-                    className="camera-stream"
-                    onError={(e) => {
-                      e.target.style.display = 'none';
-                      e.target.nextSibling.style.display = 'flex';
-                    }}
-                  />
-                ) : (
-                  <div className="camera-placeholder">
-                    <Camera size={48} />
-                    <p>{camera.status === 'offline' ? 'Camera Offline' : 'Camera Error'}</p>
+              <div className="camera-metadata">
+                <div className="metadata-item">
+                  <span className="metadata-label">Type:</span>
+                  <span className="metadata-value">{camera.camera_type}</span>
+                </div>
+                <div className="metadata-item">
+                  <span className="metadata-label">Resolution:</span>
+                  <span className="metadata-value">{camera.resolution || 'Unknown'}</span>
+                </div>
+                <div className="metadata-item">
+                  <span className="metadata-label">FPS:</span>
+                  <span className="metadata-value">{camera.fps || 'N/A'}</span>
+                </div>
+                <div className="metadata-item">
+                  <span className="metadata-label">Location:</span>
+                  <span className="metadata-value">{camera.location || 'Not set'}</span>
+                </div>
+                {camera.last_seen && (
+                  <div className="metadata-item">
+                    <span className="metadata-label">Last Seen:</span>
+                    <span className="metadata-value">{formatDate(camera.last_seen)}</span>
                   </div>
                 )}
-                {camera.status === 'offline' && (
-                  <div className="camera-placeholder">
-                    <Camera size={48} />
-                    <p>Camera Offline</p>
-                  </div>
-                )}
-              </div>
-
-              <div className="camera-controls">
-                <span className="btn btn-secondary" style={{cursor: 'default'}}>
-                  {camera.location || 'No location'}
-                </span>
                 {camera.processing_active && (
-                  <span className="btn btn-warning" style={{cursor: 'default'}}>
-                    Processing: {camera.processing_type}
-                  </span>
+                  <div className="metadata-item">
+                    <span className="metadata-label">Processing:</span>
+                    <span className="metadata-value processing-active">
+                      {camera.processing_type}
+                    </span>
+                  </div>
                 )}
               </div>
             </div>

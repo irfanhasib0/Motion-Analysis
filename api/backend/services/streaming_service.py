@@ -125,9 +125,10 @@ class StreamingService:
         
         lock = self.stream_locks[camera_id]
         
-        while cap.isOpened():
+        while cap.is_opened():
             with lock:
                 ret, frame = cap.read()
+                
                 if not ret:
                     yield self.generate_failure_frame("Failed to Read Frame")
                     continue
@@ -143,7 +144,7 @@ class StreamingService:
             yield buffer
             
             # Small delay to control frame rate
-            time.sleep(1.0 / 30)  # 30 FPS max
+            #time.sleep(1.0 / 30)  # 30 FPS max
     
     def generate_processing_stream(self, camera_id: str) -> Generator[bytes, None, None]:
         """Generate processed video stream from camera"""
@@ -153,21 +154,20 @@ class StreamingService:
         lock = self.stream_locks.get(camera_id)
 
         while camera_id in self._camera_trackers:
-            frame = None
-            if lock:
-                with lock:
-                    frame = getattr(self, '_latest_viz', {}).get(camera_id)
-            else:
-                frame = getattr(self, '_latest_viz', {}).get(camera_id)
-                
-                # Resize frame if needed for better streaming performance
-                processed_frame = self._resize_frame_for_streaming(frame)
-                buffer = self.frame_to_bytes(processed_frame)
-                
-                yield buffer
-                
-                # Small delay to control frame rate
-                time.sleep(1.0 / 30)  # 30 FPS max
+            #with lock:
+            processed_frame = getattr(self, '_latest_viz', {}).get(camera_id, None)
+            if processed_frame is None:
+                yield self.generate_failure_frame("No Processed Frame Available")
+                time.sleep(1.0 / 30)
+                continue
+            # Resize frame if needed for better streaming performance
+            #processed_frame = self._resize_frame_for_streaming(frame)
+            buffer = self.frame_to_bytes(processed_frame)
+            
+            yield buffer
+            
+            # Small delay to control frame rate
+            time.sleep(1.0 / 30)  # 30 FPS max
 
 
     def generate_recording_stream(self, recording_id: str) -> Generator[bytes, None, None]:
@@ -221,7 +221,7 @@ class StreamingService:
         finally:
             cap.release()
 
-    def _resize_frame_for_streaming(self, frame, max_width: int = 1280):
+    def _resize_frame_for_streaming(self, frame, max_width: int = 640):
         """Resize frame for optimal streaming performance"""
         height, width = frame.shape[:2]
         
@@ -232,39 +232,4 @@ class StreamingService:
             new_height = int(height * ratio)
             frame = cv2.resize(frame, (new_width, new_height))
         
-        return frame        
-    
-    def close_camera_stream(self, camera_id: str):
-        """Close camera stream"""
-        # First, stop any active stream generators
-        if camera_id in self.active_streams:
-            self.active_streams[camera_id] = False
-            logger.info(f"Stopped active stream generator for camera {camera_id}")
-        
-        time.sleep(0.2)  # Increased wait time
-        
-        # Force cleanup of camera capture
-        if camera_id in self._camera_streams:
-            cap = self._camera_streams[camera_id]
-            try:
-                if cap and hasattr(cap, 'isOpened') and cap.isOpened():
-                    cap.release()
-                    logger.info(f"Released camera capture for {camera_id}")
-                # Force delete the capture object
-                del cap
-            except Exception as e:
-                logger.warning(f"Error releasing camera {camera_id}: {e}")
-            finally:
-                del self._camera_streams[camera_id]
-            
-        if camera_id in self.stream_locks:
-            del self.stream_locks[camera_id]
-            
-        # Force garbage collection to ensure resources are freed
-        gc.collect()
-        logger.info(f"Closed camera stream for {camera_id}")
-
-    def close_all_streams(self):
-        """Close all camera streams"""
-        for camera_id in list(self._camera_streams.keys()):
-            self.close_camera_stream(camera_id)
+        return frame
