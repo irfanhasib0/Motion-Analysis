@@ -25,58 +25,26 @@ const LiveView = ({ recordings = [], cameras = [] }) => {
 
   // Stop all videos when page changes
   useEffect(() => {
-    Object.values(videoRefs.current).forEach(video => {
-      if (video) {
-        video.pause();
-        video.currentTime = 0;
-      }
-    });
+    // Clear playing state when page changes
     setPlayingId(null);
   }, [currentPage]);
 
   const handleMouseEnter = (recordingId) => {
-    const video = videoRefs.current[recordingId];
-    if (video && playingId !== recordingId) {
-      video.currentTime = 0;
-      video.play().catch(err => console.error('Play error:', err));
-    }
+    // For MJPEG streams, we don't need play/pause control
+    // The stream is always playing once the img src is set
   };
 
   const handleMouseLeave = (recordingId) => {
-    const video = videoRefs.current[recordingId];
-    if (video && playingId !== recordingId) {
-      video.pause();
-      video.currentTime = 0;
-    }
+    // For MJPEG streams, we don't need play/pause control
   };
 
   const handleClick = (recordingId) => {
     console.log('Click on recording:', recordingId);
-    const video = videoRefs.current[recordingId];
-    console.log('Video element:', video);
-    
-    if (video) {
-      if (playingId === recordingId) {
-        console.log('Pausing video');
-        video.pause();
-        setPlayingId(null);
-      } else {
-        console.log('Playing video');
-        // Pause all other videos
-        Object.entries(videoRefs.current).forEach(([id, v]) => {
-          if (v && id !== recordingId.toString()) {
-            v.pause();
-          }
-        });
-        video.play().catch(err => {
-          console.error('Play error:', err);
-          toast.error('Failed to play video: ' + err.message);
-        });
-        setPlayingId(recordingId);
-      }
+    // For MJPEG streams, toggle visual indicator only
+    if (playingId === recordingId) {
+      setPlayingId(null);
     } else {
-      console.error('Video element not found for recording:', recordingId);
-      toast.error('Video not loaded yet');
+      setPlayingId(recordingId);
     }
   };
 
@@ -139,16 +107,13 @@ const LiveView = ({ recordings = [], cameras = [] }) => {
                 onClick={() => handleClick(recording.id)}
               >
                 <div className="reel-thumbnail">
-                  <video
+                  <img
                     ref={(el) => (videoRefs.current[recording.id] = el)}
                     className="reel-video"
                     src={`/api/recordings/${recording.id}/stream`}
-                    muted
-                    loop
-                    preload="metadata"
-                    playsInline
-                    onLoadedMetadata={() => console.log('Video loaded:', recording.id)}
-                    onError={(e) => console.error('Video error:', recording.id, e)}
+                    alt={`Recording ${recording.id}`}
+                    onLoad={() => console.log('Stream loaded:', recording.id)}
+                    onError={(e) => console.error('Stream error:', recording.id, e)}
                   />
                   
                   {!isPlaying && (

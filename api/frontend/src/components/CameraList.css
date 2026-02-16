@@ -301,3 +301,57 @@
   font-weight: 700;
   letter-spacing: 0.5px;
 }
+
+/* Camera Results Display */
+.camera-results {
+  margin-top: 16px;
+  background: rgba(255, 255, 255, 0.95);
+  backdrop-filter: blur(20px) saturate(180%);
+  border-radius: 12px;
+  padding: 16px;
+  border: 1px solid rgba(0, 137, 123, 0.2);
+}
+
+.results-header {
+  font-size: 14px;
+  font-weight: 600;
+  color: #00695c;
+  margin-bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.results-content {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.results-json {
+  background: rgba(0, 105, 92, 0.05);
+  border: 1px solid rgba(0, 137, 123, 0.15);
+  border-radius: 8px;
+  padding: 12px;
+  font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
+  font-size: 12px;
+  color: #004d40;
+  overflow-x: auto;
+  max-height: 200px;
+  overflow-y: auto;
+  margin: 0;
+}
+
+.results-meta {
+  display: flex;
+  gap: 16px;
+  font-size: 12px;
+  color: #00897b;
+}
+
+.results-meta span {
+  background: rgba(0, 137, 123, 0.1);
+  padding: 4px 12px;
+  border-radius: 6px;
+  font-weight: 500;
+}

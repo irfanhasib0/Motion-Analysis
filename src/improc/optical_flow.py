@@ -322,7 +322,7 @@ class OpticalFlowTracker:
             self.prev_gray = gray
             self.viz_div_h = int(gray.shape[0] // (self.num_traj_viz+1))
             self.viz_div_w = int(gray.shape[1])
-            return frame, {}, frame, frame
+            return frame, {}, frame, frame,  {}
         
         if self.det_method == 'fast':
             for i in self.prev_pts.keys():
@@ -342,6 +342,7 @@ class OpticalFlowTracker:
         sorted_ids = self.memory.get_sorted_traj_ids(curr_pids=pts.keys(), num_of_kpts=self.num_traj_viz)
         viz_frame = self._draw_pts_flow(frame, self.prev_pts)
         plot_array = frame *0
+        res = {}
         for _ch,_id in enumerate(sorted_ids):
             _ch += 1
             vel = 0.1*self.memory.get_traj_velocities(traj_id=_id)#[-200:]
@@ -361,11 +362,13 @@ class OpticalFlowTracker:
                              color=self.colors[_ch],
                              thickness=2)
                 y_pos = y_pos - self.viz_div_h + 25
-                for elem in [f'id: {_id}', f'vel: {vel.mean():.2f} diff: {int(self.bg_diff)}']:
+                mean_vel = np.mean(vel)
+                for elem in [f'id: {_id}', f'vel: {mean_vel:.2f} diff: {int(self.bg_diff)}']:
                     cv2.putText(plot_array, elem,
                                 (10, y_pos),
                                 cv2.FONT_HERSHEY_SIMPLEX, 1.0, self.colors[_ch], 2)
                     y_pos += 25
+                res[_id] = {'vel': round(mean_vel,2), 'bg_diff': int(self.bg_diff)}
         
         # Snapshot full-length trajectories into coreset when available
         self.coreset.add_n_traj(self.memory.motion_trajs)
@@ -384,11 +387,11 @@ class OpticalFlowTracker:
 
         if self.det_method == 'fast':
             self.prev_pts = self._detect_pts(gray, det_feat_pts=False)
-            return viz_frame, pts, viz_mem1, viz_mem2
+            return viz_frame, pts, viz_mem1, viz_mem2,  res
         
         self._update_init_pts(gray)
         self.count += 1
-        return viz_frame, pts, viz_mem1, viz_mem2
+        return viz_frame, pts, viz_mem1, viz_mem2, res
 
     def get_coreset_prototypes(self, k=32):
         """Return selected representative trajectory ids and embeddings."""

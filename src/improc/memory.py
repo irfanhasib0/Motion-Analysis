@@ -56,8 +56,14 @@ class FlowMemory:
     def get_sorted_traj_ids(self, curr_pids = [], num_of_kpts = 5):
         _ids = sorted(self.traj_len.keys(), key=lambda x: self.traj_len[x], reverse=True)
         if len(curr_pids) == 0:
-            return sorted(_ids[:num_of_kpts]) # sort alphabetically for consistency
-        sorted_ids =  []
+            valid_ids = []
+            for tid in _ids:
+                pid = int(tid.split('|')[0])
+                if self.pid_hist[pid]['last_seen'] <= self.keep_last_seen:  # recently seen, keep as candidate
+                    valid_ids.append(tid)
+            return sorted(valid_ids[:num_of_kpts]) # sort alphabetically for consistency
+            
+        sorted_ids =  []    
         extra_sorted_ids = []
         for tid in _ids:
             pid = int(tid.split('|')[0])

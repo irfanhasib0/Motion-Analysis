@@ -363,6 +363,7 @@ const CameraList = ({ cameras, setCameras }) => {
                 {/* LEFT COLUMN: Primary camera with operation controls */}
                 <div className="camera-column">
                   <div className="camera-frame">
+                    {api.get_}
                     {camera.status === 'online' || camera.status === 'recording' ? (
                         <img
                           key={`${camera.id}:${camera.last_seen || camera.status}`}

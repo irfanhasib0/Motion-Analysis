@@ -147,6 +147,11 @@ class CameraService(StreamingService):
         self._camera_streams = {}
         self._camera_trackers = {}
 
+        self.motion_check_interval = 10  # seconds
+        self.max_clip_length = 60  # seconds
+        self.max_velocity = 0.4  # velocity threshold for motion detection
+        self.max_bg_diff = 200  # background difference threshold for motion detection
+
     def __del__(self):
         # Clean up any active recordings on shutdown
         for camera_id in list(self.active_recordings.keys()):
@@ -424,8 +429,8 @@ class CameraService(StreamingService):
 
         # Get camera properties
         fps = db_camera['fps']
-        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        width = cap.width
+        height = cap.height
         
         # Setup video writer
         fourcc = cv2.VideoWriter_fourcc(*'mp4v')
@@ -433,9 +438,21 @@ class CameraService(StreamingService):
         
         return recording_id, file_path, out
     
+    def remove_no_motion_recording(self, recording_id: str, file_path: str, out: cv2.VideoWriter, clip_motion_detected: bool):
+        out.release()
+        # Delete file if no motion detected, otherwise keep it
+        if not clip_motion_detected:
+            if os.path.exists(file_path):
+                os.remove(file_path)
+                logger.info(f"Deleted no-motion recording: {file_path}")
+            # Remove from database
+            self.db.delete_recording(recording_id)
+
     def record_worker(self, file_path, recording_id, camera_id, cap, out, fps):
             
             start_time = time.time()
+            clip_start_time = time.time()
+            clip_motion_detected = False
             while camera_id in self.active_recordings:
                 # Prefer frames already read by the streaming loop
                 lock = self.stream_locks.get(camera_id)
@@ -443,27 +460,40 @@ class CameraService(StreamingService):
                 if lock:
                     with lock:
                         frame = getattr(self, '_latest_frames', {}).get(camera_id)
+                        res   = getattr(self, '_latest_res', {}).get(camera_id)
                 else:
                     frame = getattr(self, '_latest_frames', {}).get(camera_id)
+                    res   = getattr(self, '_latest_res', {}).get(camera_id)
 
+
+                # Rotate files if duration exceeds threshold (placeholder 60s)
+                if time.time() - start_time > self.motion_check_interval:
+                    recent_motion_detected = False
+                    for _id in res.keys():
+                        vel = res[_id]['vel']
+                        bg_diff = int(res[_id]['bg_diff'])
+                        if vel > self.max_velocity or bg_diff > self.max_bg_diff:
+                            recent_motion_detected = True
+                            clip_motion_detected = True
+                            logger.info(f"Motion detected for camera {camera_id} - ID: {_id}, Velocity: {vel}, BG Diff: {bg_diff}")
+                            break
+
+                    if not recent_motion_detected or (time.time() - clip_start_time) > self.max_clip_length:
+                        self.remove_no_motion_recording(recording_id, file_path, out, clip_motion_detected)
+                        recording_id, file_path, out = self.init_recording(camera_id, self.db.get_camera(camera_id), cap)
+                        clip_start_time = time.time()
+                        clip_motion_detected = False
+                    start_time = time.time()
+                
                 if frame is None:
                     # Fallback: read directly if no stream consumer is running
                     ret, frame = cap.read()
                     if not ret:
                         break
 
-                # Rotate files if duration exceeds threshold (placeholder 60s)
-                if time.time() - start_time > 60:
-                    out.release()
-                    recording_id, file_path, out = self.init_recording(camera_id, self.db.get_camera(camera_id), cap)
-                    start_time = time.time()
+                out.write(frame)    
 
-                out.write(frame)
-                time.sleep(1.0 / fps)
-                    
-            
-            out.release()
-            
+            self.remove_no_motion_recording(recording_id, file_path, out, clip_motion_detected)
             # Calculate duration and file size
             duration = int(time.time() - start_time)
             file_size = os.path.getsize(file_path) if os.path.exists(file_path) else 0

@@ -1,6 +1,7 @@
 import gc
 import os
 import cv2
+import json
 import numpy as np
 import asyncio
 import threading
@@ -73,6 +74,7 @@ class StreamingService:
         self.active_streams: Dict[str, bool] = {}  # Track active stream generators
         self._latest_frames: Dict[str, np.ndarray] = {}
         self._latest_viz: Dict[str, np.ndarray] = {}
+        self._latest_res: Dict[str, Dict[str, Any]] = {}
         
     def generate_failure_frame(self, msg: str = "Camera Unavailable"):
         failure_frame = np.zeros((480, 640, 3), dtype=np.uint8)  # Placeholder frame for errors
@@ -137,8 +139,9 @@ class StreamingService:
             
             # Resize frame if needed for better streaming performance
             frame  = self._resize_frame_for_streaming(frame)
-            frame, _, viz1, viz2  = tracker.detect(frame)
+            frame, _, viz1, viz2, res = tracker.detect(frame)
             self._latest_viz[camera_id] = viz1
+            self._latest_res[camera_id] = res
             buffer = self.frame_to_bytes(frame)
             
             yield buffer
@@ -168,8 +171,8 @@ class StreamingService:
             
             # Small delay to control frame rate
             time.sleep(1.0 / 30)  # 30 FPS max
-
-
+            
+            
     def generate_recording_stream(self, recording_id: str) -> Generator[bytes, None, None]:
         """Generate video stream from recorded file"""
         # Get recording from database
@@ -233,3 +236,11 @@ class StreamingService:
             frame = cv2.resize(frame, (new_width, new_height))
         
         return frame
+    
+    def generate_result_json_stream(self, camera_id: str) -> Generator[Dict[str, int|float], None, None]:
+        """Generate JSON stream of processing results for a camera"""
+        while camera_id in self._camera_trackers:
+            res = getattr(self, '_latest_res', {}).get(camera_id, None)
+            if res is not None:
+                yield json.dumps(res)
+            time.sleep(1.0)  # Update every second

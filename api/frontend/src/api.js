@@ -61,6 +61,7 @@ export const api = {
   getBlankStreamUrl: (cameraId) => `${API_BASE_URL}/api/cameras/${cameraId}/stream/blank`,
   getRecordingStreamUrl: (recordingId) => `${API_BASE_URL}/api/recordings/${recordingId}/stream`,
   getProcessingStreamUrl: (cameraId) => `${API_BASE_URL}/api/cameras/${cameraId}/processing_stream`,
+  getResultStreamUrl: (cameraId) => `${API_BASE_URL}/api/cameras/${cameraId}/result_stream`,
   // Processing endpoints
   getProcessingTypes: () => apiClient.get('/processing/types'),
   startProcessing: (cameraId, processorType, params = {}) => 
