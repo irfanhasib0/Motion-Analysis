@@ -318,18 +318,18 @@ async def download_recording(recording_id: str):
 # Serve React app
 @app.get("/")
 async def serve_react_app():
-    if os.path.exists("frontend/build/index.html"):
-        return FileResponse("frontend/build/index.html")
+    if os.path.exists("../frontend/build/index.html"):
+        return FileResponse("../frontend/build/index.html")
     else:
         return {"message": "NVR Server API is running. Frontend not built. Access the API at /docs"}
 
 @app.get("/{path:path}")
 async def serve_react_routes(path: str):
-    file_path = f"frontend/build/{path}"
+    file_path = f"../frontend/build/{path}"
     if os.path.exists(file_path) and os.path.isfile(file_path):
         return FileResponse(file_path)
-    elif os.path.exists("frontend/build/index.html"):
-        return FileResponse("frontend/build/index.html")
+    elif os.path.exists("../frontend/build/index.html"):
+        return FileResponse("../frontend/build/index.html")
     else:
         return {"message": "NVR Server API is running. Frontend not built. Access the API at /docs"}
 
