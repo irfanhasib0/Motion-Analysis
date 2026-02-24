@@ -4,6 +4,32 @@ const API_BASE_URL = process.env.NODE_ENV === 'production'
   ? window.location.origin 
   : 'http://localhost:9001';
 
+const TOKEN_STORAGE_KEY = 'nvr_access_token';
+
+const getStoredToken = () => localStorage.getItem(TOKEN_STORAGE_KEY);
+
+const buildUrlWithToken = (path) => {
+  const token = getStoredToken();
+  const base = `${API_BASE_URL}${path}`;
+  if (!token) {
+    return base;
+  }
+  const separator = base.includes('?') ? '&' : '?';
+  return `${base}${separator}access_token=${encodeURIComponent(token)}`;
+};
+
+const appendQueryParams = (url, params = {}) => {
+  const entries = Object.entries(params).filter(([, value]) => value !== undefined && value !== null && value !== '');
+  if (entries.length === 0) {
+    return url;
+  }
+  const separator = url.includes('?') ? '&' : '?';
+  const query = entries
+    .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(String(value))}`)
+    .join('&');
+  return `${url}${separator}${query}`;
+};
+
 const apiClient = axios.create({
   baseURL: `${API_BASE_URL}/api`,
   timeout: 10000,
@@ -12,6 +38,11 @@ const apiClient = axios.create({
 // Request interceptor
 apiClient.interceptors.request.use(
   (config) => {
+    const token = getStoredToken();
+    if (token) {
+      config.headers = config.headers || {};
+      config.headers.Authorization = `Bearer ${token}`;
+    }
     console.log(`API Request: ${config.method?.toUpperCase()} ${config.url}`);
     return config;
   },
@@ -32,6 +63,17 @@ apiClient.interceptors.response.use(
 );
 
 export const api = {
+  // Auth endpoints
+  login: (password) => apiClient.post('/auth/login', { password }),
+  setAccessToken: (token) => {
+    if (token) {
+      localStorage.setItem(TOKEN_STORAGE_KEY, token);
+    }
+  },
+  getAccessToken: () => getStoredToken(),
+  clearAccessToken: () => localStorage.removeItem(TOKEN_STORAGE_KEY),
+  appendQueryParams,
+
   // Camera endpoints
   getCameras: () => apiClient.get('/cameras'),
   createCamera: (camera) => apiClient.post('/cameras', camera),
@@ -52,16 +94,16 @@ export const api = {
   },
   deleteRecording: (recordingId) => apiClient.delete(`/recordings/${recordingId}`),
   downloadRecording: (recordingId) => {
-    return `${API_BASE_URL}/api/recordings/${recordingId}/download`;
+    return buildUrlWithToken(`/api/recordings/${recordingId}/download`);
   },
   
   // Streaming endpoints
-  getCameraStreamUrl: (cameraId) => `${API_BASE_URL}/api/cameras/${cameraId}/stream`,
+  getCameraStreamUrl: (cameraId) => buildUrlWithToken(`/api/cameras/${cameraId}/stream`),
   closeCameraStream: (cameraId) => apiClient.post(`/cameras/${cameraId}/stream/close`),
-  getBlankStreamUrl: (cameraId) => `${API_BASE_URL}/api/cameras/${cameraId}/stream/blank`,
-  getRecordingStreamUrl: (recordingId) => `${API_BASE_URL}/api/recordings/${recordingId}/stream`,
-  getProcessingStreamUrl: (cameraId) => `${API_BASE_URL}/api/cameras/${cameraId}/processing_stream`,
-  getResultStreamUrl: (cameraId) => `${API_BASE_URL}/api/cameras/${cameraId}/result_stream`,
+  getBlankStreamUrl: (cameraId) => buildUrlWithToken(`/api/cameras/${cameraId}/stream/blank`),
+  getRecordingStreamUrl: (recordingId) => buildUrlWithToken(`/api/recordings/${recordingId}/stream`),
+  getProcessingStreamUrl: (cameraId) => buildUrlWithToken(`/api/cameras/${cameraId}/processing_stream`),
+  getResultStreamUrl: (cameraId) => buildUrlWithToken(`/api/cameras/${cameraId}/result_stream`),
   // Processing endpoints
   getProcessingTypes: () => apiClient.get('/processing/types'),
   startProcessing: (cameraId, processorType, params = {}) => 

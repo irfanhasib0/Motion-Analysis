@@ -133,6 +133,38 @@ DEFAULT_RESOLUTION=1920x1080
 DEFAULT_FPS=30
 ```
 
+### Password Login (Backend)
+
+Set in `.env`:
+
+```bash
+AUTH_ENABLED=true
+API_PASSWORD=change-this-password
+AUTH_TOKEN_TTL_SECONDS=86400
+```
+
+Login and get bearer token:
+
+```bash
+curl -X POST http://localhost:8000/api/auth/login \
+    -H "Content-Type: application/json" \
+    -d '{"password":"change-this-password"}'
+```
+
+Use token for API calls:
+
+```bash
+curl http://localhost:8000/api/cameras \
+    -H "Authorization: Bearer <access_token>"
+```
+
+Quick alternative (no token exchange):
+
+```bash
+curl http://localhost:8000/api/cameras \
+    -H "x-api-password: change-this-password"
+```
+
 ## Directory Structure
 
 ```

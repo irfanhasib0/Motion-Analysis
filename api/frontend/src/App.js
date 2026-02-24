@@ -8,6 +8,7 @@ import CameraList from './components/CameraList';
 import RecordingList from './components/RecordingList';
 import LiveView from './components/LiveView';
 import SystemSettings from './components/SystemSettings';
+import LoginScreen from './components/LoginScreen';
 import { api } from './api';
 
 import './App.css';
@@ -17,72 +18,120 @@ function App() {
   const [recordings, setRecordings] = useState([]);
   const [systemInfo, setSystemInfo] = useState({});
   const [loading, setLoading] = useState(true);
+  const [authLoading, setAuthLoading] = useState(false);
+  const [authError, setAuthError] = useState('');
+  const [isAuthenticated, setIsAuthenticated] = useState(true);
 
   useEffect(() => {
-    loadInitialData();
-    
-    // Setup WebSocket connection for real-time updates
+    const bootstrap = async () => {
+      setLoading(true);
+      try {
+        await loadInitialData();
+        setIsAuthenticated(true);
+      } catch (error) {
+        const statusCode = error?.response?.status;
+        if (statusCode === 401) {
+          setIsAuthenticated(false);
+          api.clearAccessToken();
+        } else {
+          setIsAuthenticated(true);
+        }
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    bootstrap();
+  }, []);
+
+  useEffect(() => {
+    if (!isAuthenticated) {
+      return;
+    }
+
     const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const ws = new WebSocket(`${wsProtocol}//${window.location.host}/ws/main`);
-    
+
     ws.onmessage = (event) => {
       const message = JSON.parse(event.data);
-      handleWebSocketMessage(message);
+      switch (message.type) {
+        case 'camera_added':
+          setCameras(prev => [...prev, message.camera]);
+          break;
+        case 'camera_updated':
+          setCameras(prev => prev.map(c => c.id === message.camera.id ? message.camera : c));
+          break;
+        case 'camera_deleted':
+          setCameras(prev => prev.filter(c => c.id !== message.camera_id));
+          break;
+        case 'recording_started':
+          setRecordings(prev => [...prev, message.recording]);
+          setCameras(prev => prev.map(c =>
+            c.id === message.camera_id
+              ? { ...c, status: 'recording', recording_id: message.recording.id }
+              : c
+          ));
+          break;
+        case 'recording_stopped':
+          setCameras(prev => prev.map(c =>
+            c.id === message.camera_id
+              ? { ...c, status: 'online', recording_id: null }
+              : c
+          ));
+          loadInitialData().catch((error) => {
+            console.error('Failed to refresh data after recording stopped:', error);
+          });
+          break;
+        default:
+          break;
+      }
     };
-    
+
     return () => {
       ws.close();
     };
-  }, []);
+  }, [isAuthenticated]);
 
-  const loadInitialData = async () => {
+  const handleLogin = async (password) => {
+    setAuthLoading(true);
+    setAuthError('');
     try {
-      const [camerasRes, recordingsRes, systemRes] = await Promise.all([
-        api.getCameras(),
-        api.getRecordings(),
-        api.getSystemInfo()
-      ]);
-      console.log('Initial data loaded:', camerasRes.data, recordingsRes.data, systemRes.data);
-      setCameras(camerasRes.data);
-      setRecordings(recordingsRes.data);
-      setSystemInfo(systemRes.data);
-    } catch (error) {
-      console.error('Failed to load initial data:', error);
-    } finally {
+      const response = await api.login(password);
+      const token = response?.data?.access_token;
+      if (!token) {
+        setAuthError('Login failed: no access token returned.');
+        return;
+      }
+      api.setAccessToken(token);
+      setIsAuthenticated(true);
+      setLoading(true);
+      await loadInitialData();
       setLoading(false);
+    } catch (error) {
+      setAuthError(error?.response?.data?.detail || 'Invalid password');
+    } finally {
+      setAuthLoading(false);
     }
   };
 
-  const handleWebSocketMessage = (message) => {
-    switch (message.type) {
-      case 'camera_added':
-        setCameras(prev => [...prev, message.camera]);
-        break;
-      case 'camera_updated':
-        setCameras(prev => prev.map(c => c.id === message.camera.id ? message.camera : c));
-        break;
-      case 'camera_deleted':
-        setCameras(prev => prev.filter(c => c.id !== message.camera_id));
-        break;
-      case 'recording_started':
-        setRecordings(prev => [...prev, message.recording]);
-        setCameras(prev => prev.map(c => 
-          c.id === message.camera_id 
-            ? { ...c, status: 'recording', recording_id: message.recording.id }
-            : c
-        ));
-        break;
-      case 'recording_stopped':
-        setCameras(prev => prev.map(c => 
-          c.id === message.camera_id 
-            ? { ...c, status: 'online', recording_id: null }
-            : c
-        ));
-        loadInitialData(); // Refresh data to get updated recording info
-        break;
-      default:
-        break;
-    }
+  const handleLogout = () => {
+    api.clearAccessToken();
+    setIsAuthenticated(false);
+    setCameras([]);
+    setRecordings([]);
+    setSystemInfo({});
+  };
+
+  const loadInitialData = async () => {
+    const [camerasRes, recordingsRes, systemRes] = await Promise.all([
+      api.getCameras(),
+      api.getRecordings(),
+      api.getSystemInfo()
+    ]);
+    console.log('Initial data loaded:', camerasRes.data, recordingsRes.data, systemRes.data);
+    setCameras(camerasRes.data);
+    setRecordings(recordingsRes.data);
+    setSystemInfo(systemRes.data);
   };
 
   if (loading) {
@@ -92,6 +141,10 @@ function App() {
         <p>Loading NVR Server...</p>
       </div>
     );
+  }
+
+  if (!isAuthenticated) {
+    return <LoginScreen onLogin={handleLogin} loading={authLoading} error={authError} />;
   }
 
   return (
@@ -112,6 +165,14 @@ function App() {
         <nav className="sidebar">
           <div className="sidebar-header">
             <h2 className="sidebar-title">NVR Server</h2>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              style={{ marginTop: 12, width: '100%' }}
+              onClick={handleLogout}
+            >
+              Logout
+            </button>
           </div>
           
           <div className="sidebar-nav">

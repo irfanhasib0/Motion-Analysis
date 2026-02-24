@@ -6,7 +6,7 @@ import numpy as np
 import asyncio
 import threading
 import time
-from typing import Generator, Dict, Optional
+from typing import Generator, Dict, Optional, Any
 import logging
 #from services.database_service import DatabaseService
 from services.config_manager import ConfigManager
@@ -75,6 +75,52 @@ class StreamingService:
         self._latest_frames: Dict[str, np.ndarray] = {}
         self._latest_viz: Dict[str, np.ndarray] = {}
         self._latest_res: Dict[str, Dict[str, Any]] = {}
+        self._fps_stats: Dict[str, Dict[str, float]] = {}
+
+    def _update_loop_fps(self, stream_key: str) -> float:
+        now = time.time()
+        stats = self._fps_stats.get(stream_key)
+        if stats is None:
+            self._fps_stats[stream_key] = {
+                "window_start": now,
+                "count": 1.0,
+                "fps": 0.0,
+            }
+            return 0.0
+
+        stats["count"] += 1.0
+        elapsed = now - stats["window_start"]
+        if elapsed >= 1.0:
+            stats["fps"] = stats["count"] / elapsed
+            stats["count"] = 0.0
+            stats["window_start"] = now
+        return stats["fps"]
+
+    def _draw_fps_overlay(self, frame: np.ndarray, fps_value: float, res: dict = {}) -> np.ndarray:
+        if frame is None:
+            return frame
+
+        if not frame.flags.writeable or not frame.flags.c_contiguous:
+            frame = np.ascontiguousarray(frame).copy()
+
+        texts = [f"FPS: {fps_value:.1f}"]
+        if len(res):
+            texts += [f" | Vel: {res['vel']}" \
+                      f" | Diff: {res['bg_diff']}"]
+        
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        font_scale = 0.6
+        thickness = 2
+        margin = 10
+        y_ofs  = margin
+        x = frame.shape[1] - 300
+        y = margin
+        for text in texts:
+            (text_w, text_h), _ = cv2.getTextSize(text, font, font_scale, thickness)
+            frame = cv2.putText(frame, text, (x, y + y_ofs), font, font_scale, (0, 255, 0), thickness, cv2.LINE_AA)
+            y_ofs += text_h + margin
+            
+        return frame
         
     def generate_failure_frame(self, msg: str = "Camera Unavailable"):
         failure_frame = np.zeros((480, 640, 3), dtype=np.uint8)  # Placeholder frame for errors
@@ -139,9 +185,17 @@ class StreamingService:
             
             # Resize frame if needed for better streaming performance
             frame  = self._resize_frame_for_streaming(frame)
-            frame, _, viz1, viz2, res = tracker.detect(frame)
-            self._latest_viz[camera_id] = viz1
-            self._latest_res[camera_id] = res
+            frame, _, viz1, viz2, _res = tracker.detect(frame)
+            frame_fps = self._update_loop_fps(f"{camera_id}:primary")
+            frame = self._draw_fps_overlay(frame, frame_fps)
+            with lock:
+                self._latest_viz[camera_id] = viz1
+            res = {'vel': 0, 'bg_diff': 0}
+            for key in _res.keys():
+                res['vel'] = max(_res[key]['vel'], res['vel'])
+                res['bg_diff'] = max(_res[key]['bg_diff'], res['bg_diff'])
+            with lock:
+                self._latest_res[camera_id] = res
             buffer = self.frame_to_bytes(frame)
             
             yield buffer
@@ -163,9 +217,14 @@ class StreamingService:
                 yield self.generate_failure_frame("No Processed Frame Available")
                 time.sleep(1.0 / 30)
                 continue
+
+            output_frame = processed_frame.copy()
+            processing_fps = self._update_loop_fps(f"{camera_id}:processing")
+            output_frame = self._draw_fps_overlay(output_frame, processing_fps, res=getattr(self, '_latest_res', {}).get(camera_id, {'vel': 0, 'bg_diff': 0}))
+
             # Resize frame if needed for better streaming performance
             #processed_frame = self._resize_frame_for_streaming(frame)
-            buffer = self.frame_to_bytes(processed_frame)
+            buffer = self.frame_to_bytes(output_frame)
             
             yield buffer
             

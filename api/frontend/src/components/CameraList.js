@@ -367,7 +367,9 @@ const CameraList = ({ cameras, setCameras }) => {
                     {camera.status === 'online' || camera.status === 'recording' ? (
                         <img
                           key={`${camera.id}:${camera.last_seen || camera.status}`}
-                          src={`${api.getCameraStreamUrl(camera.id)}?ts=${encodeURIComponent(camera.last_seen || Date.now())}`}
+                          src={api.appendQueryParams(api.getCameraStreamUrl(camera.id), {
+                            ts: camera.last_seen || Date.now(),
+                          })}
                           alt={`Camera ${camera.name}`}
                           className="camera-stream"
                           style={{ width: '100%', height: 'auto', aspectRatio: parseAspect(camera.resolution), objectFit: 'contain' }}
@@ -460,7 +462,10 @@ const CameraList = ({ cameras, setCameras }) => {
                     {(camera.status === 'online' || camera.status === 'recording') ? (
                         <img
                           key={`${camera.id}:support:${camera.last_seen || camera.status}`}
-                          src={`${api.getProcessingStreamUrl(camera.id)}?view=support&ts=${encodeURIComponent(camera.last_seen || Date.now())}`}
+                          src={api.appendQueryParams(api.getProcessingStreamUrl(camera.id), {
+                            view: 'support',
+                            ts: camera.last_seen || Date.now(),
+                          })}
                           alt={`Support view for ${camera.name}`}
                           className="camera-stream"
                           style={{ width: '100%', height: 'auto', aspectRatio: parseAspect(camera.resolution), objectFit: 'contain' }}

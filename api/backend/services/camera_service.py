@@ -1,6 +1,7 @@
 import cv2
 import numpy as np
 import os
+import json
 import asyncio
 import subprocess
 import threading
@@ -228,10 +229,6 @@ class CameraService(StreamingService):
         """Add a new camera"""
         camera_id = f"{camera_data.name}_{camera_data.camera_type.value}_{int(time.time())}"
         
-        # Validate camera source
-        if not self._validate_camera_source(camera_data.source, camera_data.camera_type):
-            raise ValueError(f"Invalid camera source: {camera_data.source}")
-        
         camera_dict = {
             'id': camera_id,
             'name': camera_data.name,
@@ -438,52 +435,98 @@ class CameraService(StreamingService):
         
         return recording_id, file_path, out
     
-    def remove_no_motion_recording(self, recording_id: str, file_path: str, out: cv2.VideoWriter, clip_motion_detected: bool):
+    def send_notification_to_app(self):
+        # Placeholder for sending notification to frontend app about recording status
+        pass
+
+    def process_recorded_clip(
+        self,
+        recording_id: str,
+        file_path: str,
+        out: cv2.VideoWriter,
+        clip_motion_detected: bool,
+        clip_start_time: float,
+        curr_time: float,
+        vel: float = 0.0,
+        bg_diff: int = 0,
+    ):
         out.release()
+        clip_duration = max(0, int(curr_time - clip_start_time))
+        file_size = os.path.getsize(file_path) if os.path.exists(file_path) else 0
+
         # Delete file if no motion detected, otherwise keep it
         if not clip_motion_detected:
             if os.path.exists(file_path):
-                os.remove(file_path)
+                os.system(f'rm -f {file_path}')
                 logger.info(f"Deleted no-motion recording: {file_path}")
             # Remove from database
             self.db.delete_recording(recording_id)
+        else:
+            # Update recording status to completed
+            self.db.update_recording(
+                recording_id,
+                {
+                    'status': 'completed',
+                    'end_time': datetime.now().isoformat(),
+                    'duration': clip_duration,
+                    'file_size': file_size,
+                    'metadata': {
+                        'motion_detected': True,
+                        'vel': float(vel),
+                        'diff': int(bg_diff),
+                    },
+                },
+            )
+            logger.info(f"Saving recording with motion: {file_path}")
+            self.send_notification_to_app()
 
-    def record_worker(self, file_path, recording_id, camera_id, cap, out, fps):
+    def record_worker(self, file_path, recording_id, camera_id, cap, out):
             
             start_time = time.time()
-            clip_start_time = time.time()
+            clip_start_time = start_time
+            curr_time = start_time
             clip_motion_detected = False
+            clip_vel = 0.0
+            clip_bg_diff = 0
             while camera_id in self.active_recordings:
                 # Prefer frames already read by the streaming loop
                 lock = self.stream_locks.get(camera_id)
                 frame = None
-                if lock:
-                    with lock:
-                        frame = getattr(self, '_latest_frames', {}).get(camera_id)
-                        res   = getattr(self, '_latest_res', {}).get(camera_id)
-                else:
+                
+                with lock:
                     frame = getattr(self, '_latest_frames', {}).get(camera_id)
                     res   = getattr(self, '_latest_res', {}).get(camera_id)
 
-
                 # Rotate files if duration exceeds threshold (placeholder 60s)
-                if time.time() - start_time > self.motion_check_interval:
+                curr_time = time.time()
+                if curr_time - start_time > self.motion_check_interval:
                     recent_motion_detected = False
-                    for _id in res.keys():
-                        vel = res[_id]['vel']
-                        bg_diff = int(res[_id]['bg_diff'])
-                        if vel > self.max_velocity or bg_diff > self.max_bg_diff:
-                            recent_motion_detected = True
-                            clip_motion_detected = True
-                            logger.info(f"Motion detected for camera {camera_id} - ID: {_id}, Velocity: {vel}, BG Diff: {bg_diff}")
-                            break
+                    
+                    vel = res['vel']
+                    bg_diff = int(res['bg_diff'])
+                    if vel > self.max_velocity or bg_diff > self.max_bg_diff:
+                        recent_motion_detected = True
+                        clip_motion_detected = True
+                        clip_vel = max(clip_vel, vel)
+                        clip_bg_diff = max(clip_bg_diff, bg_diff)
 
-                    if not recent_motion_detected or (time.time() - clip_start_time) > self.max_clip_length:
-                        self.remove_no_motion_recording(recording_id, file_path, out, clip_motion_detected)
+                    if not recent_motion_detected or (curr_time - clip_start_time) > self.max_clip_length:
+                        self.process_recorded_clip(
+                            recording_id,
+                            file_path,
+                            out,
+                            clip_motion_detected,
+                            clip_start_time,
+                            curr_time,
+                            vel=clip_vel,
+                            bg_diff=clip_bg_diff,
+                        )
                         recording_id, file_path, out = self.init_recording(camera_id, self.db.get_camera(camera_id), cap)
-                        clip_start_time = time.time()
+                        clip_start_time = curr_time
                         clip_motion_detected = False
-                    start_time = time.time()
+                        clip_vel = 0.0
+                        clip_bg_diff = 0
+                    start_time = curr_time
                 
                 if frame is None:
                     # Fallback: read directly if no stream consumer is running
@@ -492,19 +535,16 @@ class CameraService(StreamingService):
                         break
 
                 out.write(frame)    
-
-            self.remove_no_motion_recording(recording_id, file_path, out, clip_motion_detected)
-            # Calculate duration and file size
-            duration = int(time.time() - start_time)
-            file_size = os.path.getsize(file_path) if os.path.exists(file_path) else 0
-            
-            # Update recording in database
-            self.db.update_recording(recording_id, {
-                'end_time': datetime.now().isoformat(),
-                'duration': duration,
-                'file_size': file_size,
-                'status': 'completed'
-            })
+            self.process_recorded_clip(
+                recording_id,
+                file_path,
+                out,
+                clip_motion_detected,
+                clip_start_time,
+                curr_time,
+                vel=clip_vel,
+                bg_diff=clip_bg_diff,
+            )
 
     def start_recording(self, camera_id: str) -> str:
         """Start recording from a camera"""
@@ -523,7 +563,7 @@ class CameraService(StreamingService):
 
         recording_id, file_path, out = self.init_recording(camera_id, db_camera, cap)
         # Start recording thread
-        recording_thread = threading.Thread(target=self.record_worker, args=(file_path, recording_id, camera_id, cap, out, db_camera['fps']))
+        recording_thread = threading.Thread(target=self.record_worker, args=(file_path, recording_id, camera_id, cap, out))
         recording_thread.daemon = True
         
         # Track active recording
@@ -575,6 +615,12 @@ class CameraService(StreamingService):
             created_at_str = db_recording.get('created_at')
             started_at_str = db_recording.get('start_time')
             ended_at_str = db_recording.get('end_time')
+            metadata = db_recording.get('metadata')
+            if isinstance(metadata, str):
+                try:
+                    metadata = json.loads(metadata) if metadata else None
+                except Exception:
+                    metadata = None
 
             recording = Recording(
                 id=db_recording['id'],
@@ -586,7 +632,8 @@ class CameraService(StreamingService):
                 created_at=datetime.fromisoformat(created_at_str) if created_at_str else datetime.fromisoformat(started_at_str),
                 started_at=datetime.fromisoformat(started_at_str) if started_at_str else None,
                 ended_at=datetime.fromisoformat(ended_at_str) if ended_at_str else None,
-                file_path=file_path
+                file_path=file_path,
+                metadata=metadata
             )
             recordings.append(recording)
         

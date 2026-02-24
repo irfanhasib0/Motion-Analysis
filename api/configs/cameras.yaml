@@ -5,12 +5,12 @@ cameras:
   camera_type: rtsp
   fps: 30
   resolution: 640x480
-  status: offline
+  status: recording
   processing_active: false
   processing_type: null
   processing_params: {}
   created_at: '2026-02-12T17:34:42.774322'
-  updated_at: '2026-02-14T23:36:41.480729'
+  updated_at: '2026-02-24T00:25:28.937707'
 - id: cam-2_webcam_1770921408
   name: cam-2
   source: '0'
@@ -22,4 +22,16 @@ cameras:
   processing_type: null
   processing_params: {}
   created_at: '2026-02-12T18:36:48.156743'
-  updated_at: '2026-02-16T21:55:18.664293'
+  updated_at: '2026-02-23T23:17:03.375108'
+- id: cam3_webcam_1771887423
+  name: cam3
+  source: '0'
+  camera_type: webcam
+  fps: 30
+  resolution: 640x480
+  status: offline
+  processing_active: false
+  processing_type: null
+  processing_params: {}
+  created_at: '2026-02-23T22:57:03.300029'
+  updated_at: '2026-02-24T00:24:14.881787'
