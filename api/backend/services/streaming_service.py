@@ -71,7 +71,8 @@ class StreamingService:
         #self.db = DatabaseService()  # Original database service for cameras and recordings
         self.db = ConfigManager()  # Use same YAML-backed DB as recording service
         self.stream_locks: Dict[str, threading.Lock] = {}
-        self.active_streams: Dict[str, bool] = {}  # Track active stream generators
+        self.active_streams: Dict[str, str] = {}  # camera_id -> active stream token
+        self.active_processing_streams: Dict[str, str] = {}  # camera_id -> active processing stream token
         self._latest_frames: Dict[str, np.ndarray] = {}
         self._latest_viz: Dict[str, np.ndarray] = {}
         self._latest_res: Dict[str, Dict[str, Any]] = {}
@@ -157,6 +158,14 @@ class StreamingService:
             return self.generate_failure_frame(f"Camera {camera_id} Not Found")
         
         logger.info(f"Generating stream for camera {camera_id}, status: {db_camera['status']}")
+
+        # Create stream token; if an old stream exists for this camera, this takes over.
+        # Old generator loop will exit when it sees token mismatch.
+        stream_token = f"{time.time_ns()}:{threading.get_ident()}"
+        previous_token = self.active_streams.get(camera_id)
+        if previous_token:
+            logger.info(f"Taking over existing stream for camera {camera_id}")
+        self.active_streams[camera_id] = stream_token
         
         # Initialize camera capture if not already done
         if camera_id not in self._camera_streams:
@@ -172,64 +181,83 @@ class StreamingService:
             self.stream_locks[camera_id] = threading.Lock()
         
         lock = self.stream_locks[camera_id]
-        
-        while cap.is_opened():
-            with lock:
-                ret, frame = cap.read()
-                
-                if not ret:
-                    yield self.generate_failure_frame("Failed to Read Frame")
-                    continue
-                # Store original frame for recording consumers
-                self._latest_frames[camera_id] = frame
-            
-            # Resize frame if needed for better streaming performance
-            frame  = self._resize_frame_for_streaming(frame)
-            frame, _, viz1, viz2, _res = tracker.detect(frame)
-            frame_fps = self._update_loop_fps(f"{camera_id}:primary")
-            frame = self._draw_fps_overlay(frame, frame_fps)
-            with lock:
-                self._latest_viz[camera_id] = viz1
-            res = {'vel': 0, 'bg_diff': 0}
-            for key in _res.keys():
-                res['vel'] = max(_res[key]['vel'], res['vel'])
-                res['bg_diff'] = max(_res[key]['bg_diff'], res['bg_diff'])
-            with lock:
-                self._latest_res[camera_id] = res
-            buffer = self.frame_to_bytes(frame)
-            
-            yield buffer
-            
-            # Small delay to control frame rate
-            #time.sleep(1.0 / 30)  # 30 FPS max
+
+        try:
+            while cap.is_opened() and self.active_streams.get(camera_id) == stream_token:
+                with lock:
+                    ret, frame = cap.read()
+
+                    if not ret:
+                        yield self.generate_failure_frame("Failed to Read Frame")
+                        continue
+                    # Store original frame for recording consumers
+                    self._latest_frames[camera_id] = frame
+
+                # Resize frame if needed for better streaming performance
+                frame  = self._resize_frame_for_streaming(frame)
+                frame, _, viz1, viz2, _res = tracker.detect(frame)
+                frame_fps = self._update_loop_fps(f"{camera_id}:primary")
+                frame = self._draw_fps_overlay(frame, frame_fps)
+                with lock:
+                    self._latest_viz[camera_id] = viz1
+                res = {'vel': 0, 'bg_diff': 0}
+                for key in _res.keys():
+                    res['vel'] = max(_res[key]['vel'], res['vel'])
+                    res['bg_diff'] = max(_res[key]['bg_diff'], res['bg_diff'])
+                with lock:
+                    self._latest_res[camera_id] = res
+                buffer = self.frame_to_bytes(frame)
+
+                yield buffer
+
+                # Small delay to control frame rate
+                #time.sleep(1.0 / 30)  # 30 FPS max
+        finally:
+            # Only clear if this stream is still the active owner
+            if self.active_streams.get(camera_id) == stream_token:
+                self.active_streams.pop(camera_id, None)
     
     def generate_processing_stream(self, camera_id: str) -> Generator[bytes, None, None]:
         """Generate processed video stream from camera"""
         # Get camera from database
         db_camera = self.db.get_camera(camera_id)
+
+        if not db_camera:
+            logger.warning(f"Camera not found: {camera_id}")
+            return self.generate_failure_frame(f"Camera {camera_id} Not Found")
+
+        stream_token = f"{time.time_ns()}:{threading.get_ident()}"
+        previous_token = self.active_processing_streams.get(camera_id)
+        if previous_token:
+            logger.info(f"Taking over existing processing stream for camera {camera_id}")
+        self.active_processing_streams[camera_id] = stream_token
         
         lock = self.stream_locks.get(camera_id)
 
-        while camera_id in self._camera_trackers:
-            #with lock:
-            processed_frame = getattr(self, '_latest_viz', {}).get(camera_id, None)
-            if processed_frame is None:
-                yield self.generate_failure_frame("No Processed Frame Available")
-                time.sleep(1.0 / 30)
-                continue
+        try:
+            while camera_id in self._camera_trackers and self.active_processing_streams.get(camera_id) == stream_token:
+                #with lock:
+                processed_frame = getattr(self, '_latest_viz', {}).get(camera_id, None)
+                if processed_frame is None:
+                    yield self.generate_failure_frame("No Processed Frame Available")
+                    time.sleep(1.0 / 30)
+                    continue
 
-            output_frame = processed_frame.copy()
-            processing_fps = self._update_loop_fps(f"{camera_id}:processing")
-            output_frame = self._draw_fps_overlay(output_frame, processing_fps, res=getattr(self, '_latest_res', {}).get(camera_id, {'vel': 0, 'bg_diff': 0}))
+                output_frame = processed_frame.copy()
+                processing_fps = self._update_loop_fps(f"{camera_id}:processing")
+                output_frame = self._draw_fps_overlay(output_frame, processing_fps, res=getattr(self, '_latest_res', {}).get(camera_id, {'vel': 0, 'bg_diff': 0}))
 
-            # Resize frame if needed for better streaming performance
-            #processed_frame = self._resize_frame_for_streaming(frame)
-            buffer = self.frame_to_bytes(output_frame)
-            
-            yield buffer
-            
-            # Small delay to control frame rate
-            time.sleep(1.0 / 30)  # 30 FPS max
+                # Resize frame if needed for better streaming performance
+                #processed_frame = self._resize_frame_for_streaming(frame)
+                buffer = self.frame_to_bytes(output_frame)
+                
+                yield buffer
+                
+                # Small delay to control frame rate
+                time.sleep(1.0 / 30)  # 30 FPS max
+        finally:
+            if self.active_processing_streams.get(camera_id) == stream_token:
+                self.active_processing_streams.pop(camera_id, None)
             
             
     def generate_recording_stream(self, recording_id: str) -> Generator[bytes, None, None]:

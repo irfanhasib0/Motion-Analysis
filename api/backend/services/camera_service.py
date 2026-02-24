@@ -32,6 +32,10 @@ class Capture:
         self.height = height
         self.fps = fps
         self.cap = None
+        self._consecutive_read_failures = 0
+        self._max_read_failures_before_reconnect = 3
+        self._reconnect_cooldown_sec = 2.0
+        self._last_reconnect_at = 0.0
         
         try:
             source = int(source)
@@ -58,9 +62,13 @@ class Capture:
         return self
     
     def open_rtsp(self, ):
+        if self.cap:
+            self.release_rtsp()
+
         cmd = [
             "ffmpeg",
             "-rtsp_transport", "tcp",
+            #"-rw_timeout", "5000000",
             "-fflags", "nobuffer",
             "-flags", "low_delay",
             "-analyzeduration", "1000000",
@@ -76,14 +84,27 @@ class Capture:
             self.cap = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=10**8)
         except Exception as e:
             logger.error(f"Failed to open RTSP stream: {e}")
+            self.cap = None
         return self
     
     def is_opened(self):
         if self.cam_type == 'webcam':
             return self.cap and self.cap.isOpened()
         elif self.cam_type in ['rtsp', 'http']:
-            return self.cap and self.cap.poll() is None
+            return self.cap and self.cap.poll() is None and self.cap.stdout is not None
         return False
+
+    def reconnect_rtsp(self) -> bool:
+        now = time.time()
+        if now - self._last_reconnect_at < self._reconnect_cooldown_sec:
+            return self.is_opened()
+
+        self._last_reconnect_at = now
+        logger.warning(f"Reconnecting stream source: {self.source}")
+        self.release_rtsp()
+        self.open_rtsp()
+        self._consecutive_read_failures = 0
+        return self.is_opened()
     
     def read_wcam(self):
         if self.cap and self.cap.isOpened():
@@ -91,12 +112,42 @@ class Capture:
         return False, None
     
     def read_rtsp(self):
-        if self.cap:
-            frame_size = self.width * self.height * 3  # Assuming default resolution for now
+        if not self.cap:
+            return False, None
+
+        if not self.is_opened():
+            self.reconnect_rtsp()
+            if not self.is_opened():
+                return False, None
+
+        frame_size = self.width * self.height * 3
+        raw = b""
+        try:
             raw = self.cap.stdout.read(frame_size)
-            if len(raw) == frame_size:
-                frame = np.frombuffer(raw, np.uint8).reshape((self.height, self.width, 3))
-                return True, frame
+        except Exception as e:
+            logger.warning(f"RTSP read failed for source {self.source}: {e}")
+
+        if len(raw) == frame_size:
+            self._consecutive_read_failures = 0
+            frame = np.frombuffer(raw, np.uint8).reshape((self.height, self.width, 3))
+            return True, frame
+
+        self._consecutive_read_failures += 1
+        if self._consecutive_read_failures >= self._max_read_failures_before_reconnect:
+            logger.warning(
+                f"Short/empty RTSP frame read ({len(raw)}/{frame_size}) from {self.source}; attempting reconnect"
+            )
+            if self.reconnect_rtsp() and self.cap and self.cap.stdout:
+                try:
+                    raw = self.cap.stdout.read(frame_size)
+                except Exception:
+                    raw = b""
+
+                if len(raw) == frame_size:
+                    self._consecutive_read_failures = 0
+                    frame = np.frombuffer(raw, np.uint8).reshape((self.height, self.width, 3))
+                    return True, frame
+
         return False, None
 
     def release_wcam(self):
@@ -106,17 +157,30 @@ class Capture:
 
     def release_rtsp(self):
         if self.cap:
-            self.cap.terminate()
+            try:
+                if self.cap.stdout:
+                    self.cap.stdout.close()
+            except Exception:
+                pass
+
+            try:
+                self.cap.terminate()
+                self.cap.wait(timeout=1.0)
+            except Exception:
+                try:
+                    self.cap.kill()
+                except Exception:
+                    pass
             self.cap = None
             
     def open(self):
-        if self.cam_type == 'rtsp':
+        if self.cam_type in ['rtsp', 'http']:
             return self.open_rtsp()
         elif self.cam_type == 'webcam':
             return self.open_wcam()
     
     def read(self):
-        if self.cam_type == 'rtsp':
+        if self.cam_type in ['rtsp', 'http']:
             return self.read_rtsp()
         elif self.cam_type == 'webcam':
             return self.read_wcam()
@@ -124,7 +188,7 @@ class Capture:
             raise ValueError(f"Unsupported camera type: {self.cam_type}")
         
     def release(self):
-        if self.cam_type == 'rtsp':
+        if self.cam_type in ['rtsp', 'http']:
             self.release_rtsp()
         elif self.cam_type == 'webcam':
             self.release_wcam()
@@ -150,8 +214,8 @@ class CameraService(StreamingService):
 
         self.motion_check_interval = 10  # seconds
         self.max_clip_length = 60  # seconds
-        self.max_velocity = 0.4  # velocity threshold for motion detection
-        self.max_bg_diff = 200  # background difference threshold for motion detection
+        self.max_velocity = 0.1#0.4  # velocity threshold for motion detection
+        self.max_bg_diff = 50#200  # background difference threshold for motion detection
 
     def __del__(self):
         # Clean up any active recordings on shutdown
@@ -404,6 +468,25 @@ class CameraService(StreamingService):
         else:
             logger.warning(f"No active camera object found for id: {camera_id}")
             return
+
+    def close_camera_stream(self, camera_id: str):
+        """Close an active camera stream and release related resources."""
+        if camera_id not in self._camera_streams:
+            logger.info(f"No active stream to close for camera: {camera_id}")
+            return
+
+        self.stop_camera(camera_id)
+
+        self.stream_locks.pop(camera_id, None)
+        self._latest_frames.pop(camera_id, None)
+        self._latest_viz.pop(camera_id, None)
+        self._latest_res.pop(camera_id, None)
+
+        self._fps_stats.pop(f"{camera_id}:primary", None)
+        self._fps_stats.pop(f"{camera_id}:processing", None)
+
+        if hasattr(self, "active_streams"):
+            self.active_streams.pop(camera_id, None)
     
     def init_recording(self, camera_id: str, db_camera: dict, cap: cv2.VideoCapture) -> Tuple[str, str, cv2.VideoWriter]:
         # Generate recording info
@@ -504,7 +587,7 @@ class CameraService(StreamingService):
                     
                     vel = res['vel']
                     bg_diff = int(res['bg_diff'])
-                    if vel > self.max_velocity or bg_diff > self.max_bg_diff:
+                    if vel > self.max_velocity or bg_diff >= self.max_bg_diff:
                         recent_motion_detected = True
                         clip_motion_detected = True
                         clip_vel = max(clip_vel, vel)

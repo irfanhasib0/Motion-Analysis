@@ -79,12 +79,116 @@ recordings:
     motion_detected: true
     vel: 7.59
     diff: 254
-- id: cam-1_rtsp_1770917682_1771892819
+- id: cam-1_rtsp_1770917682_1771914099
   camera_id: cam-1_rtsp_1770917682
-  file_path: /projects/Motion-Analysis/api/backend/services/../../recordings/cam-1_rtsp_1770917682/cam-1_rtsp_1770917682_1771892819.mp4
-  start_time: '2026-02-24T00:26:59.153367'
+  file_path: /projects/Motion-Analysis/api/backend/services/../../recordings/cam-1_rtsp_1770917682/cam-1_rtsp_1770917682_1771914099.mp4
+  start_time: '2026-02-24T06:21:39.874981'
+  status: completed
+  end_time: '2026-02-24T06:21:59.855910'
+  duration: 20
+  file_size: 12373584
+  created_at: '2026-02-24T06:21:39.875006'
+  metadata:
+    motion_detected: true
+    vel: 2.02
+    diff: 187
+- id: cam-1_rtsp_1770917682_1771915703
+  camera_id: cam-1_rtsp_1770917682
+  file_path: /projects/Motion-Analysis/api/backend/services/../../recordings/cam-1_rtsp_1770917682/cam-1_rtsp_1770917682_1771915703.mp4
+  start_time: '2026-02-24T06:48:23.223633'
+  status: completed
+  end_time: '2026-02-24T06:49:03.259312'
+  duration: 40
+  file_size: 27456270
+  created_at: '2026-02-24T06:48:23.223653'
+  metadata:
+    motion_detected: true
+    vel: 5.12
+    diff: 248
+- id: cam-1_rtsp_1770917682_1771915973
+  camera_id: cam-1_rtsp_1770917682
+  file_path: /projects/Motion-Analysis/api/backend/services/../../recordings/cam-1_rtsp_1770917682/cam-1_rtsp_1770917682_1771915973.mp4
+  start_time: '2026-02-24T06:52:53.582893'
+  status: completed
+  end_time: '2026-02-24T06:53:13.603748'
+  duration: 20
+  file_size: 11377646
+  created_at: '2026-02-24T06:52:53.582912'
+  metadata:
+    motion_detected: true
+    vel: 1.09
+    diff: 165
+- id: cam-1_rtsp_1770917682_1771916013
+  camera_id: cam-1_rtsp_1770917682
+  file_path: /projects/Motion-Analysis/api/backend/services/../../recordings/cam-1_rtsp_1770917682/cam-1_rtsp_1770917682_1771916013.mp4
+  start_time: '2026-02-24T06:53:33.633136'
+  status: completed
+  end_time: '2026-02-24T06:53:53.686479'
+  duration: 20
+  file_size: 10013775
+  created_at: '2026-02-24T06:53:33.633156'
+  metadata:
+    motion_detected: true
+    vel: 0.08
+    diff: 254
+- id: cam-1_rtsp_1770917682_1771940294
+  camera_id: cam-1_rtsp_1770917682
+  file_path: /projects/Motion-Analysis/api/backend/services/../../recordings/cam-1_rtsp_1770917682/cam-1_rtsp_1770917682_1771940294.mp4
+  start_time: '2026-02-24T13:38:14.710169'
+  status: completed
+  end_time: '2026-02-24T13:38:34.690907'
+  duration: 20
+  file_size: 10417113
+  created_at: '2026-02-24T13:38:14.710279'
+  metadata:
+    motion_detected: true
+    vel: 0.26
+    diff: 185
+- id: cam-1_rtsp_1770917682_1771940594
+  camera_id: cam-1_rtsp_1770917682
+  file_path: /projects/Motion-Analysis/api/backend/services/../../recordings/cam-1_rtsp_1770917682/cam-1_rtsp_1770917682_1771940594.mp4
+  start_time: '2026-02-24T13:43:14.846066'
+  status: completed
+  end_time: '2026-02-24T13:43:34.781236'
+  duration: 20
+  file_size: 13149964
+  created_at: '2026-02-24T13:43:14.846121'
+  metadata:
+    motion_detected: true
+    vel: 2.43
+    diff: 101
+- id: cam-1_rtsp_1770917682_1771940824
+  camera_id: cam-1_rtsp_1770917682
+  file_path: /projects/Motion-Analysis/api/backend/services/../../recordings/cam-1_rtsp_1770917682/cam-1_rtsp_1770917682_1771940824.mp4
+  start_time: '2026-02-24T13:47:04.902489'
+  status: completed
+  end_time: '2026-02-24T13:47:34.930517'
+  duration: 30
+  file_size: 16205392
+  created_at: '2026-02-24T13:47:04.902516'
+  metadata:
+    motion_detected: true
+    vel: 1.02
+    diff: 207
+- id: cam-1_rtsp_1770917682_1771940904
+  camera_id: cam-1_rtsp_1770917682
+  file_path: /projects/Motion-Analysis/api/backend/services/../../recordings/cam-1_rtsp_1770917682/cam-1_rtsp_1770917682_1771940904.mp4
+  start_time: '2026-02-24T13:48:24.988731'
+  status: completed
+  end_time: '2026-02-24T13:48:44.949790'
+  duration: 20
+  file_size: 9962979
+  created_at: '2026-02-24T13:48:24.988798'
+  metadata:
+    motion_detected: true
+    vel: 0.51
+    diff: 202
+- id: cam-1_rtsp_1770917682_1771941085
+  camera_id: cam-1_rtsp_1770917682
+  file_path: /projects/Motion-Analysis/api/backend/services/../../recordings/cam-1_rtsp_1770917682/cam-1_rtsp_1770917682_1771941085.mp4
+  start_time: '2026-02-24T13:51:25.277852'
   status: recording
   end_time: null
   duration: null
   file_size: null
-  created_at: '2026-02-24T00:26:59.153400'
+  created_at: '2026-02-24T13:51:25.277894'
