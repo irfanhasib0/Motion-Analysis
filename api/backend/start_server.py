@@ -368,6 +368,15 @@ async def get_recordings(camera_id: Optional[str] = None):
     """Get all recordings, optionally filtered by camera"""
     return camera_service.get_recordings(camera_id)
 
+@app.get("/api/recordings/storage")
+async def get_recording_storage():
+    """Get recording storage stats and enforce low-space cleanup policy."""
+    try:
+        return camera_service.get_recording_storage_info(enforce_policy=True)
+    except Exception as e:
+        logger.error(f"Failed to get recording storage info: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.delete("/api/recordings/{recording_id}")
 async def delete_recording(recording_id: str):
     """Delete a recording"""

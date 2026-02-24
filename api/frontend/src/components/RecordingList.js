@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Play, Download, Trash2, Clock, HardDrive, Camera, Search } from 'lucide-react';
 import { toast } from 'react-hot-toast';
 import { api } from '../api';
@@ -10,6 +10,20 @@ const RecordingList = ({ recordings, setRecordings, cameras }) => {
   const [sortBy, setSortBy] = useState('created_at');
   const [sortOrder, setSortOrder] = useState('desc');
   const [searchTerm, setSearchTerm] = useState('');
+  const [storageInfo, setStorageInfo] = useState(null);
+
+  const loadStorageInfo = async () => {
+    try {
+      const response = await api.getRecordingStorageInfo();
+      setStorageInfo(response.data);
+    } catch (error) {
+      console.error('Failed to load recording storage info:', error);
+    }
+  };
+
+  useEffect(() => {
+    loadStorageInfo();
+  }, [recordings.length]);
 
   const handleDeleteRecording = async (recordingId) => {
     if (!window.confirm('Are you sure you want to delete this recording?')) {
@@ -168,6 +182,9 @@ const RecordingList = ({ recordings, setRecordings, cameras }) => {
       <div className="content-section">
         <div className="section-header">
           <h2 className="section-title">Video Recordings ({filteredRecordings.length})</h2>
+          <div className="section-subtitle" style={{ marginTop: '8px' }}>
+            Available Storage: {storageInfo ? formatBytes(storageInfo.free_bytes) : 'Loading...'}
+          </div>
         </div>
         
         {/* Filters */}

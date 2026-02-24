@@ -216,6 +216,7 @@ class CameraService(StreamingService):
         self.max_clip_length = 60  # seconds
         self.max_velocity = 0.1#0.4  # velocity threshold for motion detection
         self.max_bg_diff = 50#200  # background difference threshold for motion detection
+        self.min_free_storage_bytes = 1 * 1024 * 1024 * 1024  # 1 GB
 
     def __del__(self):
         # Clean up any active recordings on shutdown
@@ -489,6 +490,8 @@ class CameraService(StreamingService):
             self.active_streams.pop(camera_id, None)
     
     def init_recording(self, camera_id: str, db_camera: dict, cap: cv2.VideoCapture) -> Tuple[str, str, cv2.VideoWriter]:
+        self._ensure_min_free_storage()
+
         # Generate recording info
         timestamp = int(time.time())
         filename = f"{camera_id}_{timestamp}.mp4"
@@ -517,6 +520,88 @@ class CameraService(StreamingService):
         out = cv2.VideoWriter(file_path, fourcc, fps, (width, height))
         
         return recording_id, file_path, out
+
+    def _parse_recording_time(self, db_recording: dict) -> datetime:
+        for key in ('start_time', 'created_at', 'end_time'):
+            value = db_recording.get(key)
+            if not value:
+                continue
+            try:
+                value = value.replace('Z', '+00:00') if isinstance(value, str) else value
+                return datetime.fromisoformat(value)
+            except Exception:
+                continue
+        return datetime.min
+
+    def _get_oldest_deletable_recording_id(self) -> Optional[str]:
+        active_recording_ids = {
+            info.get('recording_id')
+            for info in self.active_recordings.values()
+            if info.get('recording_id')
+        }
+
+        candidates = []
+        for recording in self.db.get_all_recordings():
+            recording_id = recording.get('id')
+            if not recording_id:
+                continue
+            if recording.get('status') == 'recording':
+                continue
+            if recording_id in active_recording_ids:
+                continue
+            candidates.append(recording)
+
+        if not candidates:
+            return None
+
+        oldest = min(candidates, key=self._parse_recording_time)
+        return oldest.get('id')
+
+    def _ensure_min_free_storage(self) -> int:
+        deleted_count = 0
+        while True:
+            usage = psutil.disk_usage(self.recordings_dir)
+            if usage.free >= self.min_free_storage_bytes:
+                break
+
+            oldest_recording_id = self._get_oldest_deletable_recording_id()
+            if not oldest_recording_id:
+                logger.warning(
+                    "Low storage detected but no deletable recording found. "
+                    f"Free bytes: {usage.free}"
+                )
+                break
+
+            try:
+                self.delete_recording(oldest_recording_id)
+                deleted_count += 1
+                logger.warning(
+                    f"Deleted oldest recording {oldest_recording_id} due to low storage "
+                    f"(free={usage.free} bytes)"
+                )
+            except Exception as e:
+                logger.error(f"Failed to delete oldest recording {oldest_recording_id}: {e}")
+                break
+
+        return deleted_count
+
+    def get_recording_storage_info(self, enforce_policy: bool = False) -> Dict:
+        deleted_count = 0
+        if enforce_policy:
+            deleted_count = self._ensure_min_free_storage()
+
+        disk = psutil.disk_usage(self.recordings_dir)
+        return {
+            'total_bytes': int(disk.total),
+            'used_bytes': int(disk.used),
+            'free_bytes': int(disk.free),
+            'total_gb': round(disk.total / (1024 ** 3), 2),
+            'used_gb': round(disk.used / (1024 ** 3), 2),
+            'free_gb': round(disk.free / (1024 ** 3), 2),
+            'percent_used': round(float(disk.percent), 2),
+            'min_free_bytes': int(self.min_free_storage_bytes),
+            'deleted_oldest_count': int(deleted_count),
+        }
     
     def send_notification_to_app(self):
         # Placeholder for sending notification to frontend app about recording status

@@ -92,6 +92,7 @@ export const api = {
     const params = cameraId ? { camera_id: cameraId } : {};
     return apiClient.get('/recordings', { params });
   },
+  getRecordingStorageInfo: () => apiClient.get('/recordings/storage'),
   deleteRecording: (recordingId) => apiClient.delete(`/recordings/${recordingId}`),
   downloadRecording: (recordingId) => {
     return buildUrlWithToken(`/api/recordings/${recordingId}/download`);
