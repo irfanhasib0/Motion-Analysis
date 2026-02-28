@@ -339,60 +339,54 @@ class OpticalFlowTracker:
         self.memory._viz_vel = None
         pts = deepcopy(self.prev_pts)
         self.memory.add(pts)
-        sorted_ids = self.memory.get_sorted_traj_ids(curr_pids=pts.keys(), num_of_kpts=self.num_traj_viz)
-        viz_frame = self._draw_pts_flow(frame, self.prev_pts)
-        plot_array = frame *0
-        res = {}
+        sorted_ids  = self.memory.get_sorted_traj_ids(curr_pids=pts.keys(), num_of_kpts=self.num_traj_viz)
+        
+        points_dict = {}
         for _ch,_id in enumerate(sorted_ids):
             _ch += 1
             vel = 0.1*self.memory.get_traj_velocities(traj_id=_id)#[-200:]
             if len(vel) > 0:
                 points = np.array([[i + 300, self.viz_div_h*_ch + 3*v] for i, v in enumerate(vel)], dtype=np.int32)
-                
                 points = points.reshape((-1, 1, 2))  # Reshape for cv2.polylines
                 points = points[-self.viz_div_w:]  # Keep only the last 'viz_div_w' points
-
-                y_pos = self.viz_div_h*_ch
-                cv2.line(plot_array, 
-                        (0, y_pos), (plot_array.shape[1], y_pos),  
-                        (150, 150, 150), 1)
-                cv2.polylines(plot_array,
-                             pts=[points],
-                             isClosed=False,
-                             color=self.colors[_ch],
-                             thickness=2)
-                y_pos = y_pos - self.viz_div_h + 25
-                mean_vel = np.mean(vel)
-                for elem in [f'id: {_id}', f'vel: {mean_vel:.2f} diff: {int(self.bg_diff)}']:
-                    cv2.putText(plot_array, elem,
-                                (10, y_pos),
-                                cv2.FONT_HERSHEY_SIMPLEX, 1.0, self.colors[_ch], 2)
-                    y_pos += 25
-                res[_id] = {'vel': round(mean_vel,2), 'bg_diff': int(self.bg_diff)}
+                points_dict[_id] = [points, np.mean(vel)]
         
-        # Snapshot full-length trajectories into coreset when available
-        self.coreset.add_n_traj(self.memory.motion_trajs)
-
-        if self.count> 5 and self.count % 1 == 0:
-            self.viz_pos, self.viz_vel = self.coreset.viz_k_centers(self.viz_pos, k=self.coreset_k)
-        else:
-            if self.viz_pos is None or self.viz_vel is None:
-                self.viz_pos, self.viz_vel = np.zeros_like(frame), np.zeros_like(frame)
-
-        viz_mem1 = self.viz_pos.copy()
-        viz_mem2 = self.viz_vel.copy()
-        if self.fg_mask is not None:
-            viz_mem2[:,:,0] = self.fg_mask
-        viz_mem1 = plot_array
-
+        viz_frame   = self._draw_pts_flow(frame, self.prev_pts)
+        plot_array, res = self.plot_velocities(frame, points_dict)
+        
         if self.det_method == 'fast':
             self.prev_pts = self._detect_pts(gray, det_feat_pts=False)
-            return viz_frame, pts, viz_mem1, viz_mem2,  res
+            return viz_frame, plot_array, res
         
         self._update_init_pts(gray)
         self.count += 1
-        return viz_frame, pts, viz_mem1, viz_mem2, res
+        return viz_frame, plot_array, res
+    
+    def plot_velocities(self, plot_array, points_dict):
+        plot_array = 0* plot_array
+        _ch = 0
+        res = {}
+        for _id, (points, mean_vel) in points_dict.items():
+            y_pos = self.viz_div_h*_ch
+            cv2.line(plot_array, 
+                    (0, y_pos), (plot_array.shape[1], y_pos),  
+                    (150, 150, 150), 1)
+            cv2.polylines(plot_array,
+                            pts=[points],
+                            isClosed=False,
+                            color=self.colors[_ch],
+                            thickness=2)
+            y_pos = y_pos - self.viz_div_h + 25
+            for elem in [f'id: {_id}', f'vel: {mean_vel:.2f} diff: {int(self.bg_diff)}']:
+                cv2.putText(plot_array, elem,
+                            (10, y_pos),
+                            cv2.FONT_HERSHEY_SIMPLEX, 1.0, self.colors[_ch], 2)
+                y_pos += 25
+            res[_id] = {'vel': round(mean_vel,2), 'bg_diff': int(self.bg_diff)}
+            _ch += 1
 
+        return plot_array, res
+        
     def get_coreset_prototypes(self, k=32):
         """Return selected representative trajectory ids and embeddings."""
         if self.coreset is None:

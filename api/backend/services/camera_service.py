@@ -197,11 +197,12 @@ class Capture:
         
 
 class CameraService(StreamingService):
-    def __init__(self):
+    def __init__(self, configs: Optional[str] = 'default'):
         super().__init__()
-
+        self.root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir, os.pardir))
+        self.db = ConfigManager(configs_dir=os.path.join(self.root_dir, 'configs', configs))  # Use same YAML-backed DB as recording service
         self.active_recordings: Dict[str, dict] = {}  # camera_id -> recording info
-        self.recordings_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, os.pardir, "recordings")
+        self.recordings_dir = os.path.join(self.root_dir, "recordings")
         self.start_time = datetime.now()
         
         # Create recordings directory
@@ -646,7 +647,19 @@ class CameraService(StreamingService):
                 },
             )
             logger.info(f"Saving recording with motion: {file_path}")
+            threading.Thread(
+                target=self._warm_browser_playback_cache,
+                args=(recording_id,),
+                daemon=True,
+            ).start()
             self.send_notification_to_app()
+
+    def _warm_browser_playback_cache(self, recording_id: str):
+        """Pre-generate browser-playable video in background to reduce first-play latency."""
+        try:
+            self.get_browser_playable_recording_path(recording_id)
+        except Exception as e:
+            logger.warning(f"Failed to warm browser playback cache for {recording_id}: {e}")
 
     def record_worker(self, file_path, recording_id, camera_id, cap, out):
             
@@ -807,6 +820,118 @@ class CameraService(StreamingService):
         
         return recordings
 
+    def get_recording_path(self, recording_id: str) -> str:
+        """Resolve recording file path from DB for playback/download endpoints."""
+        db_recording = self.db.get_recording(recording_id)
+        if not db_recording:
+            raise ValueError(f"Recording not found: {recording_id}")
+
+        file_path = db_recording.get('file_path')
+        if not file_path:
+            raise ValueError(f"Recording file path missing: {recording_id}")
+
+        candidates: List[str] = []
+
+        normalized_path = os.path.abspath(file_path)
+        candidates.append(normalized_path)
+
+        # Backward compatibility for older DB entries that may have relative/legacy paths
+        candidates.append(os.path.abspath(os.path.join(self.root_dir, file_path)))
+
+        # Remap legacy absolute paths from another environment using `/recordings/...` suffix
+        normalized_file_path = file_path.replace('\\', '/')
+        marker = '/recordings/'
+        marker_index = normalized_file_path.find(marker)
+        if marker_index >= 0:
+            suffix = normalized_file_path[marker_index + len(marker):]
+            candidates.append(os.path.join(self.recordings_dir, suffix))
+
+        # Reconstruct from known metadata as a final fallback
+        filename = os.path.basename(normalized_file_path)
+        camera_id = db_recording.get('camera_id')
+        if filename and camera_id:
+            candidates.append(os.path.join(self.recordings_dir, str(camera_id), filename))
+        if filename:
+            candidates.append(os.path.join(self.recordings_dir, filename))
+
+        for candidate in candidates:
+            candidate_abs = os.path.abspath(candidate)
+            if os.path.exists(candidate_abs):
+                # Self-heal DB path when it points to a stale location
+                if db_recording.get('file_path') != candidate_abs:
+                    self.db.update_recording(recording_id, {'file_path': candidate_abs})
+                return candidate_abs
+
+        raise ValueError(f"Recording file not found: {recording_id}")
+
+    def _get_video_codec(self, file_path: str) -> Optional[str]:
+        """Return codec name (e.g. h264, mpeg4) for the first video stream."""
+        try:
+            result = subprocess.run(
+                [
+                    "ffprobe",
+                    "-v", "error",
+                    "-select_streams", "v:0",
+                    "-show_entries", "stream=codec_name",
+                    "-of", "default=noprint_wrappers=1:nokey=1",
+                    file_path,
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode != 0:
+                return None
+            codec = (result.stdout or "").strip().lower()
+            return codec or None
+        except Exception:
+            return None
+
+    def get_browser_playable_recording_path(self, recording_id: str) -> str:
+        """Return recording path optimized for HTML5 video playback.
+
+        If source codec is not broadly browser-compatible, create and reuse a
+        transcoded H.264 version alongside the source file.
+        """
+        source_path = self.get_recording_path(recording_id)
+        codec = self._get_video_codec(source_path)
+
+        # Most reliable baseline for browser playback in MP4 containers
+        if codec in {"h264", "avc1"}:
+            return source_path
+
+        root, ext = os.path.splitext(source_path)
+        playable_path = f"{root}.browser{ext or '.mp4'}"
+
+        source_mtime = os.path.getmtime(source_path)
+        if os.path.exists(playable_path):
+            playable_mtime = os.path.getmtime(playable_path)
+            if playable_mtime >= source_mtime and os.path.getsize(playable_path) > 0:
+                return playable_path
+
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-i", source_path,
+            "-map", "0:v:0",
+            "-c:v", "libx264",
+            "-preset", "ultrafast",
+            "-crf", "28",
+            "-pix_fmt", "yuv420p",
+            "-movflags", "+faststart",
+            "-an",
+            playable_path,
+        ]
+
+        result = subprocess.run(cmd, check=False, capture_output=True, text=True)
+        if result.returncode != 0 or not os.path.exists(playable_path) or os.path.getsize(playable_path) == 0:
+            stderr_tail = (result.stderr or "")[-500:]
+            logger.error(f"Failed to transcode recording {recording_id} for browser playback: {stderr_tail}")
+            return source_path
+
+        logger.info(f"Transcoded recording for browser playback: {playable_path}")
+        return playable_path
+
     def delete_recording(self, recording_id: str):
         """Delete a recording"""
         db_recording = self.db.get_recording(recording_id)
@@ -817,6 +942,11 @@ class CameraService(StreamingService):
         file_path = db_recording['file_path']
         if os.path.exists(file_path):
             os.remove(file_path)
+
+        root, ext = os.path.splitext(file_path)
+        playable_path = f"{root}.browser{ext or '.mp4'}"
+        if os.path.exists(playable_path):
+            os.remove(playable_path)
         
         # Delete from database
         self.db.delete_recording(recording_id)

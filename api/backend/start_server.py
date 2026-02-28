@@ -20,25 +20,48 @@ from services.camera_service import CameraService
 from models.camera import Camera, CameraCreate, CameraUpdate
 from models.recording import Recording, RecordingCreate
 
+user = os.popen('uname -n').read().strip()
+if user == 'irfan-linux':
+    configs = 'pc'
+elif user == 'raspberrypi':
+    configs = 'server'
+else:
+    configs = 'default'
+
+print("Running with config:", configs)
+
+# Initialize services
+camera_service = CameraService(configs=configs)
+    
+AUTH_ENABLED = os.getenv("AUTH_ENABLED", "0").lower() in {"1", "true", "yes", "on"}
+AUTH_PASSWORD = os.getenv("API_PASSWORD", "admin123")
+AUTH_TOKEN_TTL_SECONDS = int(os.getenv("AUTH_TOKEN_TTL_SECONDS", "86400"))
+AUTH_SECRET = os.getenv("AUTH_SECRET", secrets.token_hex(32))
+
 # Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="NVR Server", description="Network Video Recorder with RTSP and Camera Support")
 
+# Mount static files for React app only if build directory exists
+frontend_build_path = "frontend/build"
+frontend_static_path = "frontend/build/static"
+if os.path.exists(frontend_static_path):
+    app.mount("/static", StaticFiles(directory=frontend_static_path), name="static")
+    logger.info("Frontend static files mounted")
+else:
+    logger.warning("Frontend build directory not found. Run 'cd frontend && npm install && npm run build' to build the frontend.")
 
-class LoginRequest(BaseModel):
-    password: str
-
-
-AUTH_ENABLED = os.getenv("AUTH_ENABLED", "0").lower() in {"1", "true", "yes", "on"}
-AUTH_PASSWORD = os.getenv("API_PASSWORD", "admin123")
-AUTH_TOKEN_TTL_SECONDS = int(os.getenv("AUTH_TOKEN_TTL_SECONDS", "86400"))
-AUTH_SECRET = os.getenv("AUTH_SECRET", secrets.token_hex(32))
+# WebSocket connections for real-time updates
+active_connections: Dict[str, WebSocket] = {}
+last_camera_status: Dict[str, str] = {}  # Track last known camera status
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/token", auto_error=False)
 api_key_scheme = APIKeyHeader(name="x-api-password", auto_error=False)
 
+class LoginRequest(BaseModel):
+    password: str
 
 def _b64url(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).decode("utf-8").rstrip("=")
@@ -135,22 +158,6 @@ async def auth_middleware(request: Request, call_next):
         status_code=401,
         media_type="application/json",
     )
-
-# Initialize services
-camera_service = CameraService()
-
-# Mount static files for React app only if build directory exists
-frontend_build_path = "frontend/build"
-frontend_static_path = "frontend/build/static"
-if os.path.exists(frontend_static_path):
-    app.mount("/static", StaticFiles(directory=frontend_static_path), name="static")
-    logger.info("Frontend static files mounted")
-else:
-    logger.warning("Frontend build directory not found. Run 'cd frontend && npm install && npm run build' to build the frontend.")
-
-# WebSocket connections for real-time updates
-active_connections: Dict[str, WebSocket] = {}
-last_camera_status: Dict[str, str] = {}  # Track last known camera status
 
 async def check_camera_status_changes():
     """Background task to check for camera status changes and broadcast updates"""
@@ -444,6 +451,21 @@ async def get_recording_stream(recording_id: str):
         )
     except Exception as e:
         logger.error(f"Failed to get recording stream: {e}")
+        raise HTTPException(status_code=404, detail=str(e))
+
+@app.get("/api/recordings/{recording_id}/play")
+async def play_recording(recording_id: str):
+    """Serve a recorded video file for browser playback"""
+    try:
+        file_path = camera_service.get_browser_playable_recording_path(recording_id)
+        if not os.path.exists(file_path):
+            raise HTTPException(status_code=404, detail="Recording file not found")
+        
+        response = FileResponse(file_path, media_type="video/mp4")
+        response.headers["Content-Disposition"] = f'inline; filename="recording_{recording_id}.mp4"'
+        return response
+    except Exception as e:
+        logger.error(f"Failed to play recording: {e}")
         raise HTTPException(status_code=404, detail=str(e))
 
 @app.get("/api/cameras/{camera_id}/result_stream")

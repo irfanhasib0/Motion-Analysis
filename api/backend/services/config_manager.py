@@ -10,13 +10,12 @@ class ConfigManager:
     Mirrors the public API of DatabaseService using YAML files stored under configs/.
     """
 
-    def __init__(self, cameras_path: Optional[str] = None, recordings_path: Optional[str] = None):
-        root = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir, os.pardir))
-        configs_dir = os.path.join(root, "configs")
+    def __init__(self, configs_dir: Optional[str] = './configs'):
+        
         os.makedirs(configs_dir, exist_ok=True)
 
-        self.cameras_path = cameras_path or os.path.join(configs_dir, "cameras.yaml")
-        self.recordings_path = recordings_path or os.path.join(configs_dir, "recordings.yaml")
+        self.cameras_path = os.path.join(configs_dir, "cameras.yaml")
+        self.recordings_path = os.path.join(configs_dir, "recordings.yaml")
 
         # Ensure files exist with base structure
         if not os.path.exists(self.cameras_path):

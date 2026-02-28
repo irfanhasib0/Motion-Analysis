@@ -5,8 +5,14 @@ const API_BASE_URL = process.env.NODE_ENV === 'production'
   : 'http://localhost:9001';
 
 const TOKEN_STORAGE_KEY = 'nvr_access_token';
+const RECORDING_PLAYBACK_MODE_KEY = 'nvr_recording_playback_mode';
 
 const getStoredToken = () => localStorage.getItem(TOKEN_STORAGE_KEY);
+
+const getStoredRecordingPlaybackMode = () => {
+  const mode = localStorage.getItem(RECORDING_PLAYBACK_MODE_KEY);
+  return mode === 'stream' ? 'stream' : 'play';
+};
 
 const buildUrlWithToken = (path) => {
   const token = getStoredToken();
@@ -72,6 +78,11 @@ export const api = {
   },
   getAccessToken: () => getStoredToken(),
   clearAccessToken: () => localStorage.removeItem(TOKEN_STORAGE_KEY),
+  getRecordingPlaybackMode: () => getStoredRecordingPlaybackMode(),
+  setRecordingPlaybackMode: (mode) => {
+    const normalized = mode === 'stream' ? 'stream' : 'play';
+    localStorage.setItem(RECORDING_PLAYBACK_MODE_KEY, normalized);
+  },
   appendQueryParams,
 
   // Camera endpoints
@@ -102,7 +113,12 @@ export const api = {
   getCameraStreamUrl: (cameraId) => buildUrlWithToken(`/api/cameras/${cameraId}/stream`),
   closeCameraStream: (cameraId) => apiClient.post(`/cameras/${cameraId}/stream/close`),
   getBlankStreamUrl: (cameraId) => buildUrlWithToken(`/api/cameras/${cameraId}/stream/blank`),
-  getRecordingStreamUrl: (recordingId) => buildUrlWithToken(`/api/recordings/${recordingId}/stream`),
+  getRecordingStreamUrl: (recordingId, mode = getStoredRecordingPlaybackMode()) => {
+    const endpoint = mode === 'stream'
+      ? `/api/recordings/${recordingId}/stream`
+      : `/api/recordings/${recordingId}/play`;
+    return buildUrlWithToken(endpoint);
+  },
   getProcessingStreamUrl: (cameraId) => buildUrlWithToken(`/api/cameras/${cameraId}/processing_stream`),
   getResultStreamUrl: (cameraId) => buildUrlWithToken(`/api/cameras/${cameraId}/result_stream`),
   // Processing endpoints

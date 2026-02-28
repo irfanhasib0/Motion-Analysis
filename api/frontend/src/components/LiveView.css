@@ -144,10 +144,20 @@
   overflow-x: auto;
   overflow-y: hidden;
   scroll-behavior: smooth;
+  scroll-snap-type: x mandatory;
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
 }
 
 .row-grid {
   scrollbar-gutter: stable both-edges;
+  cursor: grab;
+  touch-action: pan-x;
+}
+
+.row-grid.dragging {
+  cursor: grabbing;
+  user-select: none;
 }
 
 /* Reel Card */
@@ -166,6 +176,8 @@
     inset 0 1px 0 rgba(255, 255, 255, 0.9);
   border: 1px solid rgba(255, 255, 255, 0.6);
   transform-origin: center;
+  scroll-snap-align: start;
+  scroll-snap-stop: always;
 }
 
 .reel-card:hover {
@@ -209,12 +221,34 @@
   overflow: hidden;
 }
 
+.enlarge-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 6;
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  background: rgba(0, 0, 0, 0.45);
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.enlarge-btn:hover {
+  background: rgba(0, 0, 0, 0.65);
+}
+
 .reel-video {
   width: 100%;
   height: 100%;
   object-fit: contain;
   display: block;
   background: #000;
+  pointer-events: none;
 }
 
 /* Play Overlay */
@@ -278,6 +312,292 @@
   background: rgba(255, 255, 255, 0.95);
   padding: 12px;
   border-top: 1px solid rgba(0, 137, 123, 0.15);
+}
+
+.reel-playback-controls {
+  margin-bottom: 10px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid rgba(0, 137, 123, 0.15);
+}
+
+.reel-progress-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  color: #00695c;
+  font-size: 11px;
+  font-weight: 600;
+  margin-bottom: 6px;
+  gap: 8px;
+}
+
+.reel-progress-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.reel-progress-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.reel-frame-count {
+  font-size: 10px;
+  font-weight: 700;
+  color: #00796b;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.reel-time-frame-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(0, 137, 123, 0.12);
+  border: 1px solid rgba(0, 137, 123, 0.2);
+  border-radius: 6px;
+  padding: 1px 6px;
+}
+
+.reel-time-frame-divider {
+  width: 1px;
+  height: 12px;
+  background: rgba(0, 121, 107, 0.35);
+}
+
+.reel-frame-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.reel-progress-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 6px;
+  border-radius: 999px;
+  outline: none;
+  background: linear-gradient(
+    to right,
+    #00a896 0%,
+    #00a896 var(--progress, 0%),
+    rgba(0, 105, 92, 0.18) var(--progress, 0%),
+    rgba(0, 105, 92, 0.18) 100%
+  );
+  cursor: pointer;
+}
+
+.reel-progress-slider:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.reel-progress-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 1px solid #fff;
+  background: #00897b;
+  box-shadow: 0 0 0 2px rgba(0, 137, 123, 0.2);
+}
+
+.reel-progress-slider::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 1px solid #fff;
+  background: #00897b;
+  box-shadow: 0 0 0 2px rgba(0, 137, 123, 0.2);
+}
+
+.reel-progress-slider::-moz-range-track {
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(0, 105, 92, 0.18);
+}
+
+.reel-frame-controls {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 0;
+  flex: 0 0 auto;
+}
+
+.frame-step-btn {
+  border: 1px solid rgba(0, 137, 123, 0.25);
+  background: rgba(0, 137, 123, 0.1);
+  color: #00695c;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  width: 22px;
+  height: 20px;
+  padding: 0;
+  line-height: 1.2;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.frame-step-btn:hover:not(:disabled) {
+  background: rgba(0, 137, 123, 0.2);
+}
+
+.frame-step-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.enlarged-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: transparent;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+.enlarged-content {
+  width: min(1100px, 95vw);
+  max-height: 92vh;
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 12px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.enlarged-header {
+  height: 42px;
+  padding: 0 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: rgba(255, 255, 255, 0.06);
+  color: #d4efea;
+}
+
+.enlarged-title {
+  font-size: 13px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.enlarged-close {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.enlarged-close:hover {
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.enlarged-card-stage {
+  flex: 1;
+  min-height: 0;
+  background: transparent;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 14px;
+}
+
+.enlarged-nav {
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  background: rgba(255, 255, 255, 0.08);
+  color: #d4efea;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.enlarged-nav:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.enlarged-nav:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.enlarged-reel-card {
+  width: min(900px, 80vw);
+  flex: 0 0 auto;
+  cursor: default;
+}
+
+.enlarged-reel-card:hover {
+  transform: none;
+}
+
+.enlarged-reel-card .reel-thumbnail {
+  max-height: calc(92vh - 270px);
+  background: transparent;
+}
+
+.enlarged-reel-card .reel-video {
+  object-fit: contain;
+  background: transparent;
+}
+
+.enlarged-inline-nav {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 7;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  background: rgba(0, 0, 0, 0.45);
+  color: #ffffff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.enlarged-inline-nav.prev {
+  left: 10px;
+}
+
+.enlarged-inline-nav.next {
+  right: 10px;
+}
+
+.enlarged-inline-nav:hover:not(:disabled) {
+  background: rgba(0, 0, 0, 0.62);
+}
+
+.enlarged-inline-nav:disabled {
+  opacity: 0.32;
+  cursor: not-allowed;
 }
 
 .camera-name {

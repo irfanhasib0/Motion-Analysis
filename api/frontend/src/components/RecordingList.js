@@ -11,6 +11,7 @@ const RecordingList = ({ recordings, setRecordings, cameras }) => {
   const [sortOrder, setSortOrder] = useState('desc');
   const [searchTerm, setSearchTerm] = useState('');
   const [storageInfo, setStorageInfo] = useState(null);
+  const [playbackMode, setPlaybackMode] = useState(api.getRecordingPlaybackMode());
 
   const loadStorageInfo = async () => {
     try {
@@ -133,17 +134,35 @@ const RecordingList = ({ recordings, setRecordings, cameras }) => {
           
           <div className="modal-body" style={{ padding: 0 }}>
             <div className="video-container" style={{ height: '60vh' }}>
-              <img 
-                src={api.getRecordingStreamUrl(recording.id)}
-                alt={`Recording ${recording.filename}`}
-                className="video-stream"
-                style={{ 
-                  width: '100%', 
-                  height: '100%', 
-                  objectFit: 'contain',
-                  backgroundColor: '#000'
-                }}
-              />
+              {playbackMode === 'stream' ? (
+                <img
+                  src={api.appendQueryParams(api.getRecordingStreamUrl(recording.id, 'stream'), {
+                    ts: Date.now(),
+                  })}
+                  alt={`Recording ${recording.filename}`}
+                  className="video-stream"
+                  style={{
+                    width: '100%',
+                    height: '100%',
+                    objectFit: 'contain',
+                    backgroundColor: '#000'
+                  }}
+                />
+              ) : (
+                <video
+                  src={api.getRecordingStreamUrl(recording.id, 'play')}
+                  className="video-stream"
+                  style={{
+                    width: '100%',
+                    height: '100%',
+                    objectFit: 'contain',
+                    backgroundColor: '#000'
+                  }}
+                  controls
+                  autoPlay
+                  playsInline
+                />
+              )}
             </div>
           </div>
           
@@ -184,6 +203,22 @@ const RecordingList = ({ recordings, setRecordings, cameras }) => {
           <h2 className="section-title">Video Recordings ({filteredRecordings.length})</h2>
           <div className="section-subtitle" style={{ marginTop: '8px' }}>
             Available Storage: {storageInfo ? formatBytes(storageInfo.free_bytes) : 'Loading...'}
+          </div>
+          <div style={{ marginTop: '12px' }}>
+            <label className="form-label" style={{ marginRight: '8px' }}>Playback Mode</label>
+            <select
+              className="form-control form-select"
+              value={playbackMode}
+              onChange={(e) => {
+                const mode = e.target.value === 'stream' ? 'stream' : 'play';
+                setPlaybackMode(mode);
+                api.setRecordingPlaybackMode(mode);
+              }}
+              style={{ width: '180px', display: 'inline-block' }}
+            >
+              <option value="play">File Playback</option>
+              <option value="stream">Legacy Stream</option>
+            </select>
           </div>
         </div>
         
