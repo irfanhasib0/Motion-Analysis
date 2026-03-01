@@ -1,24 +1,46 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { Camera, Play, Clock, Activity, BarChart3, ChevronLeft, ChevronRight, Pause, Image, Maximize2, X } from 'lucide-react';
+import { Camera, Play, ChevronLeft, ChevronRight, Pause, Maximize2, X, Download, Trash2 } from 'lucide-react';
 import { api } from '../api';
+import {
+  TimeFrameBadge,
+  FrameStepButtons,
+  RecordingMetaInfo,
+  getRecordingMetadata,
+  formatDuration,
+  formatPlaybackTime,
+  resolvePlaybackFps,
+  getRecordingPlaybackViewData,
+  buildRecordingsByCamera,
+  buildCameraRows,
+  buildRowMetricsData,
+} from './EventViewUtils';
 import './LiveView.css';
 
-const LiveView = ({ recordings = [], cameras = [] }) => {
+const EventView = ({ recordings = [], cameras = [] }) => {
+  // ===== Tunable interaction parameters =====
   const MOUSE_DRAG_SENSITIVITY = 2.2;
   const TOUCH_DRAG_SENSITIVITY = 1.8;
 
+  // ===== Source data normalization =====
   const validRecordings = Array.isArray(recordings) ? recordings : [];
+  const [removedRecordingIds, setRemovedRecordingIds] = useState({});
   const completedRecordings = validRecordings.filter(
-    (recording) => (recording?.status || '').toLowerCase() === 'completed'
+    (recording) => (recording?.status || '').toLowerCase() === 'completed' && !removedRecordingIds[recording.id]
   );
   const validCameras = Array.isArray(cameras) ? cameras : [];
+
+  // ===== UI state =====
   const [playingId, setPlayingId] = useState(null);
   const [hoveredId, setHoveredId] = useState(null);
+  const [highlightedRecordingId, setHighlightedRecordingId] = useState(null);
   const [playbackMode, setPlaybackMode] = useState(api.getRecordingPlaybackMode());
   const [playbackStatsById, setPlaybackStatsById] = useState({});
   const [expandedContext, setExpandedContext] = useState(null);
+
+  // ===== Mutable refs for media, drag, and seeking =====
   const videoRefs = useRef({});
   const expandedVideoRefs = useRef({});
+  const reelCardRefs = useRef({});
   const rowScrollRefs = useRef({});
   const seekStateRef = useRef({});
   const rowDragStateRef = useRef({
@@ -40,6 +62,7 @@ const LiveView = ({ recordings = [], cameras = [] }) => {
   });
   const suppressClickUntilRef = useRef(0);
 
+  // ===== Utility: snap row scroll to closest card =====
   const snapRowToNearestCard = (cameraId) => {
     const rowElement = rowScrollRefs.current[cameraId];
     if (!rowElement) {
@@ -69,6 +92,7 @@ const LiveView = ({ recordings = [], cameras = [] }) => {
     });
   };
 
+  // ===== Utility: stop/unload inline media when expanded modal is active =====
   const stopInlineMediaPlayback = () => {
     Object.values(videoRefs.current).forEach((element) => {
       if (!element) {
@@ -95,83 +119,11 @@ const LiveView = ({ recordings = [], cameras = [] }) => {
     });
   };
 
-  const recordingsByCamera = completedRecordings
-    .slice()
-    .sort((a, b) => new Date(b.start_time) - new Date(a.start_time))
-    .reduce((acc, recording) => {
-      const key = recording.camera_id || 'unknown_camera';
-      if (!acc[key]) {
-        acc[key] = [];
-      }
-      acc[key].push(recording);
-      return acc;
-    }, {});
+  // ===== Derived structure: recordings grouped by camera =====
+  const recordingsByCamera = buildRecordingsByCamera(completedRecordings);
+  const cameraRows = buildCameraRows(recordingsByCamera, validCameras);
 
-  const cameraRows = Object.keys(recordingsByCamera)
-    .map((cameraId) => {
-      const cameraInfo = validCameras.find((cam) => cam.id === cameraId) || { id: cameraId, name: 'Unknown Camera' };
-      return {
-        cameraId,
-        cameraName: cameraInfo.name,
-        recordings: recordingsByCamera[cameraId],
-      };
-    })
-    .sort((a, b) => a.cameraName.localeCompare(b.cameraName));
-
-  const getRecordingMetadata = (recording) => {
-    const metadata = recording?.metadata;
-    if (!metadata) return {};
-
-    if (typeof metadata === 'string') {
-      try {
-        return JSON.parse(metadata);
-      } catch (_error) {
-        return {};
-      }
-    }
-
-    return typeof metadata === 'object' ? metadata : {};
-  };
-
-  const formatTimestampParts = (value) => {
-    if (!value) {
-      return { date: 'N/A', time: '' };
-    }
-
-    const parsed = new Date(value);
-    if (Number.isNaN(parsed.getTime())) {
-      return { date: String(value), time: '' };
-    }
-
-    return {
-      date: parsed.toLocaleDateString(undefined, { day: '2-digit', month: 'short' }),
-      time: parsed.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }),
-    };
-  };
-
-  const formatDuration = (value) => {
-    const numericValue = Number(value);
-    if (Number.isFinite(numericValue)) {
-      const totalSeconds = Math.max(0, Math.round(numericValue));
-      const minutes = Math.floor(totalSeconds / 60);
-      const seconds = totalSeconds % 60;
-      return `${minutes}m ${seconds}s`;
-    }
-    return 'N/A';
-  };
-
-  const formatPlaybackTime = (value) => {
-    const numericValue = Number(value);
-    if (!Number.isFinite(numericValue) || numericValue < 0) {
-      return '00:00.00';
-    }
-    const totalSeconds = Math.floor(numericValue);
-    const minutes = Math.floor(totalSeconds / 60);
-    const seconds = totalSeconds % 60;
-    const centiseconds = Math.floor((numericValue - totalSeconds) * 100);
-    return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}.${centiseconds.toString().padStart(2, '0')}`;
-  };
-
+  // ===== Playback stat and seek handlers =====
   const updatePlaybackStats = (recordingId, patch) => {
     setPlaybackStatsById((current) => ({
       ...current,
@@ -271,11 +223,7 @@ const LiveView = ({ recordings = [], cameras = [] }) => {
     }
 
     const metadata = getRecordingMetadata(recording);
-    const fpsFromRecording = Number(recording.fps);
-    const fpsFromMetadata = Number(metadata.fps);
-    const fps = Number.isFinite(fpsFromRecording) && fpsFromRecording > 0
-      ? fpsFromRecording
-      : (Number.isFinite(fpsFromMetadata) && fpsFromMetadata > 0 ? fpsFromMetadata : 30);
+    const fps = resolvePlaybackFps(recording, metadata);
 
     const frameSeconds = 1 / fps;
     const duration = Number(video.duration) || Number(playbackStatsById[recordingId]?.duration) || 0;
@@ -289,6 +237,7 @@ const LiveView = ({ recordings = [], cameras = [] }) => {
     });
   };
 
+  // ===== Row and card interactions =====
   const scrollRow = (cameraId, direction) => {
     const rowElement = rowScrollRefs.current[cameraId];
     if (!rowElement) return;
@@ -352,6 +301,56 @@ const LiveView = ({ recordings = [], cameras = [] }) => {
     setHoveredId(null);
   };
 
+  const handleTimelinePointClick = (cameraId, recordingId) => {
+    setHighlightedRecordingId(recordingId);
+    setHoveredId(recordingId);
+
+    const rowElement = rowScrollRefs.current[cameraId];
+    const cardElement = reelCardRefs.current[recordingId];
+    if (rowElement && cardElement) {
+      const targetLeft = Math.max(0, cardElement.offsetLeft - 8);
+      rowElement.scrollTo({
+        left: targetLeft,
+        behavior: 'smooth',
+      });
+    }
+  };
+
+  const handleDownloadRecording = (recordingId) => {
+    const url = api.downloadRecording(recordingId);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = '';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const handleDeleteRecording = async (recordingId) => {
+    const confirmed = window.confirm('Delete this recording?');
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      await api.deleteRecording(recordingId);
+      setRemovedRecordingIds((current) => ({ ...current, [recordingId]: true }));
+      if (highlightedRecordingId === recordingId) {
+        setHighlightedRecordingId(null);
+      }
+      if (hoveredId === recordingId) {
+        setHoveredId(null);
+      }
+      if (playingId === recordingId) {
+        setPlayingId(null);
+      }
+    } catch (error) {
+      console.error('Failed to delete recording:', error);
+      window.alert(error?.response?.data?.detail || 'Failed to delete recording');
+    }
+  };
+
+  // ===== Desktop drag-to-scroll handlers =====
   const handleRowPointerDown = (cameraId, event) => {
     if (event.pointerType !== 'mouse') {
       return;
@@ -440,6 +439,7 @@ const LiveView = ({ recordings = [], cameras = [] }) => {
     };
   };
 
+  // ===== Touch drag-to-scroll handlers =====
   const handleRowTouchStart = (cameraId, event) => {
     if (!event.touches || event.touches.length === 0) {
       return;
@@ -537,6 +537,7 @@ const LiveView = ({ recordings = [], cameras = [] }) => {
     };
   };
 
+  // ===== Expanded card modal handlers =====
   const handleOpenExpanded = (recording, cameraId, index) => {
     stopInlineMediaPlayback();
     setExpandedContext({ cameraId, index });
@@ -572,6 +573,7 @@ const LiveView = ({ recordings = [], cameras = [] }) => {
     });
   };
 
+  // Keep inline card playback stopped while expanded view is open.
   useEffect(() => {
     if (expandedContext) {
       stopInlineMediaPlayback();
@@ -621,12 +623,81 @@ const LiveView = ({ recordings = [], cameras = [] }) => {
 
       <div className="camera-rows">
         {cameraRows.map((row) => {
+          const {
+            chartMetrics,
+            chartMaxVelocity,
+            chartMaxBgDiff,
+            axisTicks,
+          } = buildRowMetricsData(row.recordings);
+
           return (
             <div key={row.cameraId} className="camera-row-card">
               <div className="camera-row-header">
                 <h3>{row.cameraName}</h3>
                 <div className="camera-row-meta">
                   <span>{row.recordings.length} videos</span>
+                </div>
+              </div>
+
+              <div className="camera-row-metrics-card">
+                {/* Mini analytics card for each camera row */}
+                <div className="camera-row-metrics-header">
+                  <span>Timestamp vs Velocity / bg_diff</span>
+                  <div className="metrics-legend">
+                    <span><span className="legend-dot velocity" /> Velocity</span>
+                    <span><span className="legend-dot bgdiff" /> bg_diff</span>
+                  </div>
+                </div>
+
+                <div className="metrics-bar-chart" role="img" aria-label="Velocity and bg_diff bar plot by timestamp">
+                  {chartMetrics.map((metric) => {
+                    if (metric.xPercent === null) {
+                      return null;
+                    }
+                    const velocityHeight = Math.max(2, (metric.velocity / chartMaxVelocity) * 100);
+                    const bgDiffHeight = Math.max(2, (metric.bgDiff / chartMaxBgDiff) * 100);
+                    const markerHeight = Math.max(velocityHeight, bgDiffHeight);
+                    return (
+                      <React.Fragment key={metric.id}>
+                        <div
+                          className="metrics-bar-group"
+                          style={{ left: `${metric.xPercent}%` }}
+                        >
+                          <span
+                            className="metrics-bar velocity"
+                            style={{ height: `${velocityHeight}%` }}
+                            title={`Velocity: ${metric.velocity.toFixed(3)}`}
+                          />
+                          <span
+                            className="metrics-bar bgdiff"
+                            style={{ height: `${bgDiffHeight}%` }}
+                            title={`bg_diff: ${metric.bgDiff.toFixed(0)}`}
+                          />
+                        </div>
+
+                        <button
+                          type="button"
+                          className={`motion-point-btn${highlightedRecordingId === metric.id ? ' active' : ''}`}
+                          style={{
+                            left: `${metric.xPercent}%`,
+                            bottom: `${Math.min(96, markerHeight + 2)}%`,
+                          }}
+                          onClick={() => handleTimelinePointClick(row.cameraId, metric.id)}
+                          title={`${metric.timeLabel} | vel: ${metric.velocity.toFixed(3)} | bg_diff: ${metric.bgDiff.toFixed(0)}`}
+                        >
+                          <span className="point-dot" />
+                        </button>
+                      </React.Fragment>
+                    );
+                  })}
+                </div>
+                <div className="metrics-time-axis">
+                  {axisTicks.map((tick, index) => (
+                    <div key={`${row.cameraId}-tick-${index}`} className="metrics-axis-tick" style={{ left: `${tick.xPercent}%` }}>
+                      <span className="metrics-axis-mark" />
+                      {tick.showLabel && <span className="metrics-axis-label">{tick.label}</span>}
+                    </div>
+                  ))}
                 </div>
               </div>
 
@@ -657,31 +728,25 @@ const LiveView = ({ recordings = [], cameras = [] }) => {
                     const isPlaying = playingId === recording.id;
                     const isHovered = hoveredId === recording.id;
                     const shouldLoadVideo = !expandedContext && (isPlaying || isHovered);
-                    const playbackStats = playbackStatsById[recording.id] || { currentTime: 0, duration: 0 };
-                    const playbackFpsFromRecording = Number(recording.fps);
-                    const playbackDuration = playbackStats.duration > 0
-                      ? playbackStats.duration
-                      : (Number(recording.duration) || 0);
-                    const playbackProgress = playbackDuration > 0
-                      ? Math.min(100, Math.max(0, (playbackStats.currentTime / playbackDuration) * 100))
-                      : 0;
-                    const metadata = getRecordingMetadata(recording);
-                    const playbackFpsFromMetadata = Number(metadata.fps);
-                    const playbackFps = Number.isFinite(playbackFpsFromRecording) && playbackFpsFromRecording > 0
-                      ? playbackFpsFromRecording
-                      : (Number.isFinite(playbackFpsFromMetadata) && playbackFpsFromMetadata > 0 ? playbackFpsFromMetadata : 30);
-                    const playbackFrame = Math.max(0, Math.floor(playbackStats.currentTime * playbackFps));
-                    const totalFrames = Math.max(0, Math.floor(playbackDuration * playbackFps));
-                    const timestampValue = metadata.time_stamp || metadata.timestamp || recording.start_time || recording.started_at || recording.created_at;
-                    const timestampParts = formatTimestampParts(timestampValue);
-                    const durationValue = metadata.duration ?? recording.duration;
-                    const velValue = metadata.vel;
-                    const diffValue = metadata.diff;
+                    const {
+                      timestampParts,
+                      durationValue,
+                      velValue,
+                      diffValue,
+                      playbackStats,
+                      playbackDuration,
+                      playbackProgress,
+                      playbackFrame,
+                      totalFrames,
+                    } = getRecordingPlaybackViewData(recording, playbackStatsById[recording.id]);
 
                     return (
                       <div
                         key={recording.id}
-                        className="reel-card"
+                        ref={(el) => {
+                          reelCardRefs.current[recording.id] = el;
+                        }}
+                        className={`reel-card${highlightedRecordingId === recording.id ? ' reel-card-highlighted' : ''}`}
                         onMouseEnter={() => handleMouseEnter(recording.id)}
                         onMouseLeave={() => handleMouseLeave(recording.id)}
                         onClick={() => handleClick(recording.id)}
@@ -746,51 +811,25 @@ const LiveView = ({ recordings = [], cameras = [] }) => {
                         </div>
 
                         <div className="reel-info">
+                          {/* Per-card playback controls */}
                           <div className="reel-playback-controls" onClick={(event) => event.stopPropagation()}>
                             <div className="reel-progress-header">
                               <div className="reel-progress-left">
-                                <span className="reel-time-frame-badge">
-                                  <span>{formatPlaybackTime(playbackStats.currentTime)}</span>
-                                  <span className="reel-time-frame-divider" />
-                                  <span className="reel-frame-inline">
-                                    <Image size={10} />
-                                    <span>{playbackFrame}</span>
-                                  </span>
-                                </span>
+                                <TimeFrameBadge timeText={formatPlaybackTime(playbackStats.currentTime)} frame={playbackFrame} />
                               </div>
-                              <div className="reel-frame-controls">
-                                <button
-                                  type="button"
-                                  className="frame-step-btn"
-                                  disabled={playbackMode !== 'play'}
-                                  onClick={(event) => {
-                                    event.stopPropagation();
-                                    stepFrame(recording, -1);
-                                  }}
-                                >
-                                  <ChevronLeft size={12} />
-                                </button>
-                                <button
-                                  type="button"
-                                  className="frame-step-btn"
-                                  disabled={playbackMode !== 'play'}
-                                  onClick={(event) => {
-                                    event.stopPropagation();
-                                    stepFrame(recording, 1);
-                                  }}
-                                >
-                                  <ChevronRight size={12} />
-                                </button>
-                              </div>
+                              <FrameStepButtons
+                                disabled={playbackMode !== 'play'}
+                                onStepBack={(event) => {
+                                  event.stopPropagation();
+                                  stepFrame(recording, -1);
+                                }}
+                                onStepForward={(event) => {
+                                  event.stopPropagation();
+                                  stepFrame(recording, 1);
+                                }}
+                              />
                               <div className="reel-progress-right">
-                                <span className="reel-time-frame-badge">
-                                  <span>{formatPlaybackTime(playbackDuration)}</span>
-                                  <span className="reel-time-frame-divider" />
-                                  <span className="reel-frame-inline">
-                                    <Image size={10} />
-                                    <span>{totalFrames}</span>
-                                  </span>
-                                </span>
+                                <TimeFrameBadge timeText={formatPlaybackTime(playbackDuration)} frame={totalFrames} />
                               </div>
                             </div>
                             <input
@@ -815,18 +854,25 @@ const LiveView = ({ recordings = [], cameras = [] }) => {
                               style={{ '--progress': `${playbackProgress}%` }}
                             />
                           </div>
-                          <div className="recording-meta">
-                            <div className="meta-item">
-                              <Clock size={12} />
-                              <span>{formatDuration(durationValue)}</span>
-                            </div>
-                            <div className="meta-item">
-                              <Activity size={12} />
-                              <span>{velValue ?? 'N/A'}</span>
-                            </div>
-                            <div className="meta-item">
-                              <BarChart3 size={12} />
-                              <span>{diffValue ?? 'N/A'}</span>
+                          <div className="reel-meta-row">
+                            <RecordingMetaInfo durationText={formatDuration(durationValue)} velValue={velValue} diffValue={diffValue} />
+                            <div className="reel-card-actions" onClick={(event) => event.stopPropagation()}>
+                              <button
+                                type="button"
+                                className="reel-action-btn"
+                                title="Download"
+                                onClick={() => handleDownloadRecording(recording.id)}
+                              >
+                                <Download size={12} />
+                              </button>
+                              <button
+                                type="button"
+                                className="reel-action-btn danger"
+                                title="Delete"
+                                onClick={() => handleDeleteRecording(recording.id)}
+                              >
+                                <Trash2 size={12} />
+                              </button>
                             </div>
                           </div>
                         </div>
@@ -849,6 +895,7 @@ const LiveView = ({ recordings = [], cameras = [] }) => {
       </div>
 
       {expandedRecording && (
+        // Expanded modal view for focused reel playback.
         <div className="enlarged-overlay" onClick={handleCloseExpanded}>
           <div className="enlarged-content" onClick={(event) => event.stopPropagation()}>
             <div className="enlarged-header">
@@ -865,26 +912,17 @@ const LiveView = ({ recordings = [], cameras = [] }) => {
             <div className="enlarged-card-stage">
               <div className="reel-card enlarged-reel-card">
                 {(() => {
-                  const metadata = getRecordingMetadata(expandedRecording);
-                  const timestampValue = metadata.time_stamp || metadata.timestamp || expandedRecording.start_time || expandedRecording.started_at || expandedRecording.created_at;
-                  const timestampParts = formatTimestampParts(timestampValue);
-                  const durationValue = metadata.duration ?? expandedRecording.duration;
-                  const velValue = metadata.vel;
-                  const diffValue = metadata.diff;
-                  const playbackStats = playbackStatsById[expandedRecording.id] || { currentTime: 0, duration: 0 };
-                  const playbackFpsFromRecording = Number(expandedRecording.fps);
-                  const playbackDuration = playbackStats.duration > 0
-                    ? playbackStats.duration
-                    : (Number(expandedRecording.duration) || 0);
-                  const playbackProgress = playbackDuration > 0
-                    ? Math.min(100, Math.max(0, (playbackStats.currentTime / playbackDuration) * 100))
-                    : 0;
-                  const playbackFpsFromMetadata = Number(metadata.fps);
-                  const playbackFps = Number.isFinite(playbackFpsFromRecording) && playbackFpsFromRecording > 0
-                    ? playbackFpsFromRecording
-                    : (Number.isFinite(playbackFpsFromMetadata) && playbackFpsFromMetadata > 0 ? playbackFpsFromMetadata : 30);
-                  const playbackFrame = Math.max(0, Math.floor(playbackStats.currentTime * playbackFps));
-                  const totalFrames = Math.max(0, Math.floor(playbackDuration * playbackFps));
+                  const {
+                    timestampParts,
+                    durationValue,
+                    velValue,
+                    diffValue,
+                    playbackStats,
+                    playbackDuration,
+                    playbackProgress,
+                    playbackFrame,
+                    totalFrames,
+                  } = getRecordingPlaybackViewData(expandedRecording, playbackStatsById[expandedRecording.id]);
 
                   return (
                     <>
@@ -949,48 +987,21 @@ const LiveView = ({ recordings = [], cameras = [] }) => {
                         <div className="reel-playback-controls">
                           <div className="reel-progress-header">
                             <div className="reel-progress-left">
-                              <span className="reel-time-frame-badge">
-                                <span>{formatPlaybackTime(playbackStats.currentTime)}</span>
-                                <span className="reel-time-frame-divider" />
-                                <span className="reel-frame-inline">
-                                  <Image size={10} />
-                                  <span>{playbackFrame}</span>
-                                </span>
-                              </span>
+                              <TimeFrameBadge timeText={formatPlaybackTime(playbackStats.currentTime)} frame={playbackFrame} />
                             </div>
-                            <div className="reel-frame-controls">
-                              <button
-                                type="button"
-                                className="frame-step-btn"
-                                disabled={playbackMode !== 'play'}
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  stepFrame(expandedRecording, -1, true);
-                                }}
-                              >
-                                <ChevronLeft size={12} />
-                              </button>
-                              <button
-                                type="button"
-                                className="frame-step-btn"
-                                disabled={playbackMode !== 'play'}
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  stepFrame(expandedRecording, 1, true);
-                                }}
-                              >
-                                <ChevronRight size={12} />
-                              </button>
-                            </div>
+                            <FrameStepButtons
+                              disabled={playbackMode !== 'play'}
+                              onStepBack={(event) => {
+                                event.stopPropagation();
+                                stepFrame(expandedRecording, -1, true);
+                              }}
+                              onStepForward={(event) => {
+                                event.stopPropagation();
+                                stepFrame(expandedRecording, 1, true);
+                              }}
+                            />
                             <div className="reel-progress-right">
-                              <span className="reel-time-frame-badge">
-                                <span>{formatPlaybackTime(playbackDuration)}</span>
-                                <span className="reel-time-frame-divider" />
-                                <span className="reel-frame-inline">
-                                  <Image size={10} />
-                                  <span>{totalFrames}</span>
-                                </span>
-                              </span>
+                              <TimeFrameBadge timeText={formatPlaybackTime(playbackDuration)} frame={totalFrames} />
                             </div>
                           </div>
                           <input
@@ -1009,20 +1020,7 @@ const LiveView = ({ recordings = [], cameras = [] }) => {
                             style={{ '--progress': `${playbackProgress}%` }}
                           />
                         </div>
-                        <div className="recording-meta">
-                          <div className="meta-item">
-                            <Clock size={12} />
-                            <span>{formatDuration(durationValue)}</span>
-                          </div>
-                          <div className="meta-item">
-                            <Activity size={12} />
-                            <span>{velValue ?? 'N/A'}</span>
-                          </div>
-                          <div className="meta-item">
-                            <BarChart3 size={12} />
-                            <span>{diffValue ?? 'N/A'}</span>
-                          </div>
-                        </div>
+                        <RecordingMetaInfo durationText={formatDuration(durationValue)} velValue={velValue} diffValue={diffValue} />
                       </div>
                     </>
                   );
@@ -1036,4 +1034,4 @@ const LiveView = ({ recordings = [], cameras = [] }) => {
   );
 };
 
-export default LiveView;
+export default EventView;

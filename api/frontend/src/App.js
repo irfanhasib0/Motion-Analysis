@@ -6,7 +6,7 @@ import { Camera, Video, Settings, BarChart3, Monitor } from 'lucide-react';
 import Dashboard from './components/Dashboard';
 import CameraList from './components/CameraList';
 import RecordingList from './components/RecordingList';
-import LiveView from './components/LiveView';
+import EventView from './components/EventView';
 import SystemSettings from './components/SystemSettings';
 import LoginScreen from './components/LoginScreen';
 import { api } from './api';
@@ -186,7 +186,7 @@ function App() {
             </NavLink>
             <NavLink to="/live" className="nav-link">
               <Monitor size={20} />
-              Live View
+              Event View
             </NavLink>
             <NavLink to="/recordings" className="nav-link">
               <Video size={20} />
@@ -222,7 +222,7 @@ function App() {
             />
             <Route 
               path="/live" 
-              element={<LiveView cameras={cameras} recordings={recordings} />} 
+              element={<EventView cameras={cameras} recordings={recordings} />} 
             />
             <Route 
               path="/recordings" 

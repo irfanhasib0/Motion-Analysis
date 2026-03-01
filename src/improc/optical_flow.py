@@ -322,7 +322,7 @@ class OpticalFlowTracker:
             self.prev_gray = gray
             self.viz_div_h = int(gray.shape[0] // (self.num_traj_viz+1))
             self.viz_div_w = int(gray.shape[1])
-            return frame, {}, frame, frame,  {}
+            return frame, frame,  {}
         
         if self.det_method == 'fast':
             for i in self.prev_pts.keys():

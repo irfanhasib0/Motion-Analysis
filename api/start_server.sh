@@ -1,64 +1,56 @@
-#!/bin/bash
+#!/usr/bin/env bash
+set -euo pipefail
 
-# NVR Server Startup Script
+# Root of the api folder (this script lives in api/)
+API_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BACKEND_DIR="$API_DIR/backend"
+FRONTEND_DIR="$API_DIR/frontend"
+LOG_FILE="$API_DIR/nvr.log"
+LOGROTATE_CONF="/etc/logrotate.d/nvr"
+RUN_USER="${USER:-$(id -un)}"
+RUN_GROUP="${GROUP:-$(id -gn)}"
 
-echo "Starting NVR Server..."
-
-# Check if Python is installed
-if ! command -v python3 &> /dev/null; then
-    echo "Python 3 is required but not installed."
+if [ ! -d "$FRONTEND_DIR" ] || [ ! -d "$BACKEND_DIR" ]; then
+    echo "Expected directories not found under API_DIR: $API_DIR"
     exit 1
 fi
 
-# Check if pip is installed
-if ! command -v pip &> /dev/null; then
-    echo "pip is required but not installed."
-    exit 1
-fi
+echo "Building frontend..."
+cd "$FRONTEND_DIR"
+npm run build
 
-# Create virtual environment if it doesn't exist
-if [ ! -d "venv" ]; then
-    echo "Creating virtual environment..."
-    python3 -m venv venv
-fi
+echo "Stopping existing backend process (if any)..."
+pkill -f "python3 start_server.py" || true
 
-# Activate virtual environment
-#echo "Activating virtual environment..."
-#source venv/bin/activate
+echo "Starting backend and writing logs to: $LOG_FILE"
+cd "$BACKEND_DIR"
+nohup python3 start_server.py >> "$LOG_FILE" 2>&1 &
 
-# Install Python dependencies
-echo "Installing Python dependencies..."
-pip install -r requirements.txt
+echo "Installing daily logrotate config at $LOGROTATE_CONF"
+tee "$LOGROTATE_CONF" > /dev/null <<EOF
+$LOG_FILE {
+    su $RUN_USER $RUN_GROUP
+    daily
+    rotate 14
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+    create 0644 $RUN_USER $RUN_GROUP
+}
+EOF
 
-# Install OpenCV if it's not already installed or if it was commented out
-#echo "Ensuring OpenCV is installed..."
-#pip install opencv-python==4.8.1.78
-
-# Check if Node.js is installed for frontend build
-#curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash
-if command -v node &> /dev/null; then
-    echo "Building React frontend..."
-    cd frontend
-    
-    # Install npm dependencies if node_modules doesn't exist
-    if [ ! -d "node_modules" ]; then
-        echo "Installing npm dependencies..."
-        npm install
-    fi
-    
-    # Build frontend
-    echo "Building frontend..."
-    npm run build
-    cd ..
+if command -v logrotate >/dev/null 2>&1; then
+    echo "Validating logrotate config..."
+    logrotate -d "$LOGROTATE_CONF" >/dev/null
 else
-    echo "Node.js not found. Skipping frontend build."
-    echo "You can build the frontend manually with: cd frontend && npm install && npm run build"
+    echo "Warning: 'logrotate' command not found. Config file was written to $LOGROTATE_CONF."
+    echo "Install logrotate to enable daily rotation scheduling/validation:"
+    echo "  Ubuntu/Debian: sudo apt-get install -y logrotate"
+    echo "  Fedora/RHEL:   sudo dnf install -y logrotate"
+    echo "  Arch:          sudo pacman -S logrotate"
 fi
 
-# Create recordings directory
-echo "Creating recordings directory..."
-mkdir -p recordings
-
-# Start the server
-echo "Starting FastAPI server..."
-python3 main.py
+echo "Done. Backend logs: $LOG_FILE"
+tail -f "$LOG_FILE"

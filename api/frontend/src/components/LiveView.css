@@ -80,6 +80,168 @@
   color: #00695c;
 }
 
+.camera-row-metrics-card {
+  margin: 4px 6px 12px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(0, 137, 123, 0.18);
+  background: rgba(255, 255, 255, 0.8);
+}
+
+.camera-row-metrics-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  font-size: 12px;
+  color: #00695c;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.metrics-legend {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.metrics-legend > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.legend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.legend-dot.velocity {
+  background: #009688;
+}
+
+.legend-dot.bgdiff {
+  background: #5c6bc0;
+}
+
+.metrics-bar-chart {
+  width: 100%;
+  height: 74px;
+  position: relative;
+  padding: 6px 4px;
+  background: linear-gradient(to top, rgba(0, 150, 136, 0.03), rgba(0, 150, 136, 0));
+  border-radius: 8px;
+}
+
+.metrics-bar-group {
+  position: absolute;
+  bottom: 6px;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 2px;
+  height: calc(100% - 12px);
+  width: 10px;
+  transform: translateX(-50%);
+}
+
+.metrics-bar {
+  width: 4px;
+  min-height: 2px;
+  border-radius: 4px 4px 0 0;
+  display: inline-block;
+}
+
+.metrics-bar.velocity {
+  background: #009688;
+}
+
+.metrics-bar.bgdiff {
+  background: #5c6bc0;
+}
+
+.metrics-points-row {
+  margin-top: 8px;
+  position: relative;
+  height: 26px;
+}
+
+.metrics-time-axis {
+  margin-top: 6px;
+  position: relative;
+  height: 18px;
+  color: #00796b;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.metrics-axis-tick {
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.metrics-axis-mark {
+  width: 1px;
+  height: 6px;
+  background: rgba(0, 121, 107, 0.45);
+}
+
+.metrics-axis-label {
+  white-space: nowrap;
+  font-size: 9px;
+  line-height: 1;
+}
+
+.motion-point-btn {
+  position: absolute;
+  transform: translate(-50%, 50%);
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 1px solid rgba(0, 137, 123, 0.45);
+  background: rgba(255, 255, 255, 0.95);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+  z-index: 8;
+}
+
+.motion-point-btn::before {
+  content: '';
+  position: absolute;
+  inset: -5px;
+  border-radius: 50%;
+}
+
+.motion-point-btn:hover {
+  background: rgba(0, 137, 123, 0.12);
+}
+
+.motion-point-btn.active {
+  border-color: rgba(0, 137, 123, 0.8);
+  box-shadow: 0 0 0 2px rgba(0, 137, 123, 0.2);
+}
+
+.point-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #00897b;
+  display: inline-block;
+  pointer-events: none;
+}
+
 /* Carousel Wrapper */
 .reels-carousel-wrapper {
   position: relative;
@@ -186,6 +348,13 @@
     0 12px 40px rgba(0, 137, 123, 0.2),
     0 6px 16px rgba(0, 105, 92, 0.15),
     inset 0 1px 0 rgba(255, 255, 255, 0.9);
+}
+
+.reel-card.reel-card-highlighted {
+  border-color: rgba(0, 137, 123, 0.75);
+  box-shadow:
+    0 0 0 2px rgba(0, 137, 123, 0.32),
+    0 8px 24px rgba(0, 137, 123, 0.2);
 }
 
 .reel-timestamp {
@@ -308,16 +477,74 @@
 
 /* Info Section */
 .reel-info {
-  position: static;
+  position: relative;
+  display: flex;
+  flex-direction: column;
   background: rgba(255, 255, 255, 0.95);
   padding: 12px;
+  padding-bottom: 12px;
   border-top: 1px solid rgba(0, 137, 123, 0.15);
 }
 
+.reel-card-actions {
+  position: static;
+  align-self: flex-start;
+  display: inline-flex;
+  gap: 10px;
+  order: 2;
+  margin-top: 1px;
+}
+
+.reel-action-btn {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  border: 1px solid rgba(0, 137, 123, 0.35);
+  background: rgba(0, 137, 123, 0.16);
+  color: #00796b;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.18s ease, color 0.18s ease, border-color 0.18s ease;
+}
+
+.reel-action-btn:hover {
+  border-color: rgba(0, 137, 123, 0.55);
+  background: rgba(0, 137, 123, 0.28);
+  color: #004d40;
+}
+
+.reel-action-btn.danger {
+  border-color: rgba(198, 40, 40, 0.45);
+  color: #b71c1c;
+  background: rgba(244, 67, 54, 0.14);
+}
+
+.reel-action-btn.danger:hover {
+  border-color: rgba(198, 40, 40, 0.65);
+  background: rgba(244, 67, 54, 0.26);
+}
+
 .reel-playback-controls {
+  order: 1;
   margin-bottom: 10px;
   padding-bottom: 10px;
   border-bottom: 1px solid rgba(0, 137, 123, 0.15);
+}
+
+.reel-meta-row {
+  order: 2;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.recording-meta {
+  order: 1;
+  flex: 1;
+  min-width: 0;
 }
 
 .reel-progress-header {
@@ -703,6 +930,7 @@
 
   .reel-info {
     padding: 12px;
+    padding-bottom: 12px;
   }
 
   .camera-name {
@@ -789,6 +1017,7 @@
 
   .reel-info {
     padding: 12px;
+    padding-bottom: 12px;
   }
 
   .camera-name {
