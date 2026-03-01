@@ -24,7 +24,7 @@ user = os.popen('uname -n').read().strip()
 if user == 'irfan-linux':
     configs = 'pc'
 elif user == 'raspberrypi':
-    configs = 'server'
+    configs = 'pi'
 else:
     configs = 'default'
 
