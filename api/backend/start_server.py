@@ -303,10 +303,8 @@ async def delete_camera(camera_id: str):
 @app.post("/api/cameras/{camera_id}/start")
 async def start_camera(camera_id: str):
     """Start/Connect to a camera"""
-    #try:
-    
-    success = camera_service.start_camera(camera_id)
-    '''
+    try:
+        success = camera_service.start_camera(camera_id)
         if success:
             await broadcast_message({"type": "camera_started", "camera_id": camera_id})
             return {"message": "Camera started successfully"}
@@ -318,7 +316,7 @@ async def start_camera(camera_id: str):
     except Exception as e:
         logger.error(f"Failed to start camera: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-    '''
+    
 
 @app.post("/api/cameras/{camera_id}/stop")
 async def stop_camera(camera_id: str):

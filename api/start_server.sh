@@ -10,6 +10,12 @@ LOGROTATE_CONF="/etc/logrotate.d/nvr"
 RUN_USER="${USER:-$(id -un)}"
 RUN_GROUP="${GROUP:-$(id -gn)}"
 
+if command -v sudo >/dev/null 2>&1; then
+    SUDO_CMD="sudo"
+else
+    SUDO_CMD=""
+fi
+
 if [ ! -d "$FRONTEND_DIR" ] || [ ! -d "$BACKEND_DIR" ]; then
     echo "Expected directories not found under API_DIR: $API_DIR"
     exit 1
@@ -31,7 +37,8 @@ cd "$BACKEND_DIR"
 nohup python3 start_server.py >> "$LOG_FILE" 2>&1 &
 
 echo "Installing daily logrotate config at $LOGROTATE_CONF"
-tee "$LOGROTATE_CONF" > /dev/null <<EOF
+if [ -n "$SUDO_CMD" ]; then
+    sudo tee "$LOGROTATE_CONF" > /dev/null <<EOF
 $LOG_FILE {
     su $RUN_USER $RUN_GROUP
     daily
@@ -44,10 +51,29 @@ $LOG_FILE {
     create 0644 $RUN_USER $RUN_GROUP
 }
 EOF
+else
+    tee "$LOGROTATE_CONF" > /dev/null <<EOF
+$LOG_FILE {
+    su $RUN_USER $RUN_GROUP
+    daily
+    rotate 14
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+    create 0644 $RUN_USER $RUN_GROUP
+}
+EOF
+fi
 
 if command -v logrotate >/dev/null 2>&1; then
     echo "Validating logrotate config..."
-    logrotate -d "$LOGROTATE_CONF" >/dev/null
+    if [ -n "$SUDO_CMD" ]; then
+        sudo logrotate -d "$LOGROTATE_CONF" >/dev/null
+    else
+        logrotate -d "$LOGROTATE_CONF" >/dev/null
+    fi
 else
     echo "Warning: 'logrotate' command not found. Config file was written to $LOGROTATE_CONF."
     echo "Install logrotate to enable daily rotation scheduling/validation:"

@@ -881,24 +881,16 @@ class CameraService(StreamingService):
         if not file_path:
             raise ValueError(f"Recording file path missing: {recording_id}")
 
-        candidates: List[str] = []
-
+        # Primary/expected location
         normalized_path = os.path.abspath(file_path)
-        candidates.append(normalized_path)
+        if os.path.exists(normalized_path):
+            if db_recording.get('file_path') != normalized_path:
+                self.db.update_recording(recording_id, {'file_path': normalized_path})
+            return normalized_path
 
-        # Backward compatibility for older DB entries that may have relative/legacy paths
-        candidates.append(os.path.abspath(os.path.join(self.root_dir, file_path)))
-
-        # Remap legacy absolute paths from another environment using `/recordings/...` suffix
-        normalized_file_path = file_path.replace('\\', '/')
-        marker = '/recordings/'
-        marker_index = normalized_file_path.find(marker)
-        if marker_index >= 0:
-            suffix = normalized_file_path[marker_index + len(marker):]
-            candidates.append(os.path.join(self.recordings_dir, suffix))
-
-        # Reconstruct from known metadata as a final fallback
-        filename = os.path.basename(normalized_file_path)
+        # Minimal fallback locations under recordings directory
+        candidates: List[str] = []
+        filename = os.path.basename(file_path)
         camera_id = db_recording.get('camera_id')
         if filename and camera_id:
             candidates.append(os.path.join(self.recordings_dir, str(camera_id), filename))
