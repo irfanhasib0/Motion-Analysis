@@ -25,6 +25,7 @@ import threading
 import queue
 import glob
 import numpy as np
+from typing import Union
 from pathlib import Path
 from gui.gui_framework import GUIFramework
 from gui.gui_comp import GUIComponents, ImageProcessor
@@ -361,7 +362,7 @@ class VideoFlowPlayer(GUI):
                 return
         self.set_input_source(path)
 
-    def set_input_source(self, path: Path | str | int):
+    def set_input_source(self, path: Union[Path, str, int]):
         scc = False
         if str(path).startswith('rtsp://') | str(path).isdigit() | str(path).endswith(('.mp4', '.avi', '.mov', '.mkv')):
             self.release_video()

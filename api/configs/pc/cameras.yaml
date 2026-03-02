@@ -22,7 +22,7 @@ cameras:
   processing_type: null
   processing_params: {}
   created_at: '2026-02-12T18:36:48.156743'
-  updated_at: '2026-03-01T07:24:44.080632'
+  updated_at: '2026-03-02T00:01:06.258313'
 - id: cam3_webcam_1771887423
   name: cam3
   source: '0'

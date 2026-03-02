@@ -6,7 +6,7 @@ import numpy as np
 import asyncio
 import threading
 import time
-from typing import Generator, Dict, Optional, Any
+from typing import Generator, Dict, Optional, Any, Union
 import logging
 #from services.database_service import DatabaseService
 from services.config_manager import ConfigManager
@@ -318,7 +318,7 @@ class StreamingService:
         
         return frame
     
-    def generate_result_json_stream(self, camera_id: str) -> Generator[Dict[str, int|float], None, None]:
+    def generate_result_json_stream(self, camera_id: str) -> Generator[Dict[str, Union[int, float]], None, None]:
         """Generate JSON stream of processing results for a camera"""
         while camera_id in self._camera_trackers:
             res = getattr(self, '_latest_res', {}).get(camera_id, None)

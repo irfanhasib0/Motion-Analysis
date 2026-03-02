@@ -1,11 +1,12 @@
 import cv2
 import subprocess
 import numpy as np
+from typing import Union
 
 source = 'rtsp://admin:L2CD8412@192.168.0.103:554/cam/realmonitor?channel=1&subtype=0&unicast=true&proto=Onvif'
 
 class Capture:
-    def __init__(self, source:str|int, width:int =640, height:int =480, fps:int =30):
+    def __init__(self, source: Union[str, int], width:int =640, height:int =480, fps:int =30):
         self.source = source
         self.cam_type = None
         self.width = width

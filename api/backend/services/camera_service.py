@@ -8,7 +8,7 @@ import threading
 import time
 import uuid
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Union
 import psutil
 import logging
 
@@ -25,7 +25,7 @@ from improc.optical_flow import OpticalFlowTracker
 logger = logging.getLogger(__name__)
 
 class Capture:
-    def __init__(self, source:str|int, width:int =640, height:int =480, fps:int =30):
+    def __init__(self, source: Union[str, int], width:int =640, height:int =480, fps:int =30):
         self.source = source
         self.cam_type = None
         self.width = width
