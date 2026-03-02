@@ -73,6 +73,8 @@ class StreamingService:
         self.active_streams: Dict[str, str] = {}  # camera_id -> active stream token
         self.active_processing_streams: Dict[str, str] = {}  # camera_id -> active processing stream token
         self._latest_frames: Dict[str, np.ndarray] = {}
+        self._latest_frame_seq: Dict[str, int] = {}
+        self._stream_frame_index: Dict[str, int] = {}
         self._latest_viz: Dict[str, np.ndarray] = {}
         self._latest_res: Dict[str, Dict[str, Any]] = {}
         self._fps_stats: Dict[str, Dict[str, float]] = {}
@@ -142,7 +144,8 @@ class StreamingService:
     
     def frame_to_bytes(self, frame) -> bytes:
         """Convert a video frame to bytes for streaming"""
-        ret, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
+        quality = int(getattr(self, 'jpeg_quality', 70) or 70)
+        ret, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, quality])
         buffer = (b'--frame\r\n'
                 b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
         return buffer
@@ -190,20 +193,34 @@ class StreamingService:
                     continue
                 # Store original frame for recording consumers
                 self._latest_frames[camera_id] = frame
+                self._latest_frame_seq[camera_id] = self._latest_frame_seq.get(camera_id, 0) + 1
+                self._stream_frame_index[camera_id] = self._stream_frame_index.get(camera_id, 0) + 1
+                frame_index = self._stream_frame_index[camera_id]
 
             # Resize frame if needed for better streaming performance
             frame  = self._resize_frame_for_streaming(frame)
-            frame, viz1, _res = tracker.detect(frame)
+            processing_stride = max(1, int(getattr(self, 'processing_stride', 1) or 1))
+            should_run_tracker = (processing_stride == 1) or (frame_index % processing_stride == 0)
+
+            if should_run_tracker:
+                frame, viz1, _res = tracker.detect(frame)
+                res = {'vel': 0, 'bg_diff': 0, 'ts': time.time()}
+                for key in _res.keys():
+                    res['vel'] = max(_res[key]['vel'], res['vel'])
+                    res['bg_diff'] = max(_res[key]['bg_diff'], res['bg_diff'])
+                with lock:
+                    self._latest_viz[camera_id] = viz1
+                    self._latest_res[camera_id] = res
+            else:
+                with lock:
+                    viz1 = self._latest_viz.get(camera_id)
+                    res = self._latest_res.get(camera_id, {'vel': 0, 'bg_diff': 0, 'ts': time.time()})
+                    if viz1 is None:
+                        viz1 = frame
+                        self._latest_viz[camera_id] = viz1
+
             frame_fps = self._update_loop_fps(f"{camera_id}:primary")
             frame = self._draw_fps_overlay(frame, frame_fps)
-            with lock:
-                self._latest_viz[camera_id] = viz1
-            res = {'vel': 0, 'bg_diff': 0}
-            for key in _res.keys():
-                res['vel'] = max(_res[key]['vel'], res['vel'])
-                res['bg_diff'] = max(_res[key]['bg_diff'], res['bg_diff'])
-            with lock:
-                self._latest_res[camera_id] = res
             buffer = self.frame_to_bytes(frame)
 
             yield buffer
@@ -230,7 +247,10 @@ class StreamingService:
         lock = self.stream_locks.get(camera_id)
 
         while camera_id in self._camera_trackers and self.active_processing_streams.get(camera_id) == stream_token:
-            with lock:
+            if lock is not None:
+                with lock:
+                    processed_frame = getattr(self, '_latest_viz', {}).get(camera_id, None)
+            else:
                 processed_frame = getattr(self, '_latest_viz', {}).get(camera_id, None)
             if processed_frame is None:
                 yield self.generate_failure_frame("No Processed Frame Available")

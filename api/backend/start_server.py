@@ -412,7 +412,13 @@ async def get_camera_stream(camera_id: str):
     try:
         return StreamingResponse(
             camera_service.generate_camera_stream(camera_id),
-            media_type="multipart/x-mixed-replace; boundary=frame"
+            media_type="multipart/x-mixed-replace; boundary=frame",
+            headers={
+                "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+                "Pragma": "no-cache",
+                "Expires": "0",
+                "X-Accel-Buffering": "no",
+            },
         )
     except Exception as e:
         logger.error(f"Failed to get camera stream: {e}")
@@ -424,7 +430,13 @@ async def get_processing_stream(camera_id: str):
     try:
         return StreamingResponse(
             camera_service.generate_processing_stream(camera_id),
-            media_type="multipart/x-mixed-replace; boundary=frame"
+            media_type="multipart/x-mixed-replace; boundary=frame",
+            headers={
+                "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+                "Pragma": "no-cache",
+                "Expires": "0",
+                "X-Accel-Buffering": "no",
+            },
         )
     except Exception as e:
         logger.error(f"Failed to get processed camera stream: {e}")
@@ -526,4 +538,5 @@ async def serve_react_routes(path: str):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("start_server:app", host="0.0.0.0", port=9001, reload=True)
+    reload_enabled = os.getenv("UVICORN_RELOAD", "0").lower() in {"1", "true", "yes", "on"}
+    uvicorn.run("start_server:app", host="0.0.0.0", port=9001, reload=reload_enabled)

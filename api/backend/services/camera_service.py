@@ -25,12 +25,13 @@ from improc.optical_flow import OpticalFlowTracker
 logger = logging.getLogger(__name__)
 
 class Capture:
-    def __init__(self, source: Union[str, int], width:int =640, height:int =480, fps:int =30):
+    def __init__(self, source: Union[str, int], width:int =640, height:int =480, fps:int =30, low_power_mode: bool = False):
         self.source = source
         self.cam_type = None
         self.width = width
         self.height = height
         self.fps = fps
+        self.low_power_mode = low_power_mode
         self.cap = None
         self._consecutive_read_failures = 0
         self._max_read_failures_before_reconnect = 3
@@ -68,9 +69,11 @@ class Capture:
         cmd = [
             "ffmpeg",
             "-rtsp_transport", "tcp",
+            "-threads", "1",
             #"-rw_timeout", "5000000",
-            "-fflags", "nobuffer",
+            "-fflags", "nobuffer+discardcorrupt",
             "-flags", "low_delay",
+            "-avioflags", "direct",
             "-analyzeduration", "1000000",
             "-probesize", "1000000",
             "-i", self.source,
@@ -81,7 +84,8 @@ class Capture:
             "pipe:1"
         ]
         try:
-            self.cap = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=10**8)
+            pipe_buffer_size = 10**6 if self.low_power_mode else 10**8
+            self.cap = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=pipe_buffer_size)
         except Exception as e:
             logger.error(f"Failed to open RTSP stream: {e}")
             self.cap = None
@@ -199,6 +203,7 @@ class Capture:
 class CameraService(StreamingService):
     def __init__(self, configs: Optional[str] = 'default'):
         super().__init__()
+        self.low_power_mode = True
         self.root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir, os.pardir))
         self.db = ConfigManager(configs_dir=os.path.join(self.root_dir, 'configs', configs))  # Use same YAML-backed DB as recording service
         self.active_recordings: Dict[str, dict] = {}  # camera_id -> recording info
@@ -217,7 +222,10 @@ class CameraService(StreamingService):
         self.max_clip_length = 60  # seconds
         self.max_velocity = 0.1#0.4  # velocity threshold for motion detection
         self.max_bg_diff = 50#200  # background difference threshold for motion detection
+        self.motion_result_max_age_sec = 3.0  # ignore stale vel/bg_diff samples
         self.min_free_storage_bytes = 1 * 1024 * 1024 * 1024  # 1 GB
+        self.processing_stride = 3 if self.low_power_mode else 1
+        self.jpeg_quality = 55 if self.low_power_mode else 70
 
     def __del__(self):
         # Clean up any active recordings on shutdown
@@ -415,7 +423,7 @@ class CameraService(StreamingService):
         
         cap = None
         try:
-            cap = Capture(source, width=resolution[0], height=resolution[1], fps=fps)    
+            cap = Capture(source, width=resolution[0], height=resolution[1], fps=fps, low_power_mode=self.low_power_mode)
         except Exception as e:
             logger.error(f"Failed to open video source: {source} with error: {e}")
             logger.error(f"Check if the source is correct and accessible: {source}")
@@ -481,6 +489,7 @@ class CameraService(StreamingService):
 
         self.stream_locks.pop(camera_id, None)
         self._latest_frames.pop(camera_id, None)
+        self._latest_frame_seq.pop(camera_id, None)
         self._latest_viz.pop(camera_id, None)
         self._latest_res.pop(camera_id, None)
 
@@ -669,22 +678,50 @@ class CameraService(StreamingService):
             clip_motion_detected = False
             clip_vel = 0.0
             clip_bg_diff = 0
+            clip_frame_count = 0
+            db_camera = self.db.get_camera(camera_id) or {}
+            target_fps = max(1, int(db_camera.get('fps', 10) or 10))
+            target_interval = 1.0 / float(target_fps)
+            next_write_at = time.time()
+            last_frame_seq = -1
+
             while camera_id in self.active_recordings:
                 # Prefer frames already read by the streaming loop
                 lock = self.stream_locks.get(camera_id)
                 frame = None
+                frame_seq = -1
+                res = {'vel': 0.0, 'bg_diff': 0}
                 
-                with lock:
-                    frame = getattr(self, '_latest_frames', {}).get(camera_id)
-                    res   = getattr(self, '_latest_res', {}).get(camera_id)
+                if lock is not None:
+                    with lock:
+                        frame = getattr(self, '_latest_frames', {}).get(camera_id)
+                        frame_seq = int(getattr(self, '_latest_frame_seq', {}).get(camera_id, -1))
+                        latest_res = getattr(self, '_latest_res', {}).get(camera_id)
+                        if isinstance(latest_res, dict):
+                            res = latest_res
+                else:
+                    latest_res = getattr(self, '_latest_res', {}).get(camera_id)
+                    if isinstance(latest_res, dict):
+                        res = latest_res
+
+                if frame is not None and frame_seq == last_frame_seq:
+                    frame = None
 
                 # Rotate files if duration exceeds threshold (placeholder 60s)
                 curr_time = time.time()
                 if curr_time - start_time > self.motion_check_interval:
                     recent_motion_detected = False
-                    
-                    vel = res['vel']
-                    bg_diff = int(res['bg_diff'])
+
+                    res_timestamp = float(res.get('ts', 0.0) or 0.0)
+                    is_stale_motion_sample = (res_timestamp <= 0.0) or ((curr_time - res_timestamp) > self.motion_result_max_age_sec)
+
+                    if is_stale_motion_sample:
+                        vel = 0.0
+                        bg_diff = 0
+                    else:
+                        vel = float(res.get('vel', 0.0))
+                        bg_diff = int(res.get('bg_diff', 0))
+
                     if vel > self.max_velocity or bg_diff >= self.max_bg_diff:
                         recent_motion_detected = True
                         clip_motion_detected = True
@@ -707,15 +744,29 @@ class CameraService(StreamingService):
                         clip_motion_detected = False
                         clip_vel = 0.0
                         clip_bg_diff = 0
+                        clip_frame_count = 0
                     start_time = curr_time
                 
                 if frame is None:
                     # Fallback: read directly if no stream consumer is running
                     ret, frame = cap.read()
                     if not ret:
-                        break
+                        time.sleep(0.05)
+                        continue
+                else:
+                    last_frame_seq = frame_seq
 
-                out.write(frame)    
+                out.write(frame)
+                clip_frame_count += 1
+
+                # Pace writes to camera FPS to avoid lock contention and CPU spikes
+                next_write_at += target_interval
+                sleep_for = next_write_at - time.time()
+                if sleep_for > 0:
+                    time.sleep(sleep_for)
+                else:
+                    next_write_at = time.time()
+
             self.process_recorded_clip(
                 recording_id,
                 file_path,

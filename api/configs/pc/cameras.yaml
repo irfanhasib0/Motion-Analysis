@@ -1,16 +1,16 @@
 cameras:
 - id: cam-1_rtsp_1770917682
   name: cam-1
-  source: rtsp://admin:L2D841A1@192.168.1.30:554/cam/realmonitor?channel=1&subtype=0&unicast=true&proto=Onvif
+  source: rtsp://admin:L2CD8412@192.168.0.103:554/cam/realmonitor?channel=1&subtype=0&unicast=true&proto=Onvif
   camera_type: rtsp
-  fps: 30
-  resolution: 640x480
+  fps: 9
+  resolution: 320x240
   status: offline
   processing_active: false
   processing_type: null
   processing_params: {}
   created_at: '2026-02-12T17:34:42.774322'
-  updated_at: '2026-02-28T05:42:11.708352'
+  updated_at: '2026-03-02T02:55:47.677562'
 - id: cam-2_webcam_1770921408
   name: cam-2
   source: '0'
@@ -25,13 +25,13 @@ cameras:
   updated_at: '2026-03-02T00:01:06.258313'
 - id: cam3_webcam_1771887423
   name: cam3
-  source: '0'
+  source: rtsp://admin:L2D841A1@192.168.2.131:554/cam/realmonitor?channel=1&subtype=0&unicast=true&proto=Onvif
   camera_type: webcam
   fps: 30
   resolution: 640x480
-  status: offline
+  status: online
   processing_active: false
   processing_type: null
   processing_params: {}
   created_at: '2026-02-23T22:57:03.300029'
-  updated_at: '2026-02-24T00:24:14.881787'
+  updated_at: '2026-03-02T04:51:05.088545'
