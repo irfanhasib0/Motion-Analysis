@@ -17,7 +17,11 @@ fi
 
 echo "Building frontend..."
 cd "$FRONTEND_DIR"
-npm run build
+if command -v npm >/dev/null 2>&1; then
+    npm run build
+else
+    echo "Warning: 'npm' not found. Skipping frontend build step."
+fi
 
 echo "Stopping existing backend process (if any)..."
 pkill -f "python3 start_server.py" || true

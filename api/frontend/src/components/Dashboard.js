@@ -175,7 +175,7 @@ const Dashboard = ({ cameras, recordings, systemInfo }) => {
           <div className="camera-info-card">
             <div className="camera-info-header">
               <div className="camera-details">
-                <div className="camera-name">start_server Process</div>
+                <div className="camera-name">start_server Process ({processPidLabel})</div>
               </div>
             </div>
             <div className="camera-metadata">
