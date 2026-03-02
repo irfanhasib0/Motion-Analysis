@@ -251,11 +251,11 @@ const CameraList = ({ cameras, setCameras }) => {
                     value={form.resolution}
                     onChange={(e) => setForm({...form, resolution: e.target.value})}
                   >
+                    <option value="320x240">320x240</option>
+                    <option value="480x360">480x360</option>
                     <option value="640x480">640x480</option>
                     <option value="1280x720">1280x720</option>
                     <option value="1920x1080">1920x1080</option>
-                    <option value="3840x2160">3840x2160</option>
-                    <option value="7680x4320">7680x4320</option>
                   </select>
                 </div>
                 

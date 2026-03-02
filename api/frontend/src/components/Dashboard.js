@@ -8,6 +8,17 @@ const Dashboard = ({ cameras, recordings, systemInfo }) => {
   const totalRecordings = recordings.length;
   const recentRecordings = recordings.slice(0, 5);
 
+  const normalizedProcessUsage = systemInfo.process_usage || systemInfo.process || {};
+  const normalizedAverages = systemInfo.averages_5m || {};
+  const normalizedDiskSize = systemInfo.disk_size || {};
+  const processPidLabel = normalizedProcessUsage.pid ?? 'N/A';
+  const normalizedCpuUsage = systemInfo.cpu_usage ?? systemInfo.cpu_percent ?? 0;
+  const normalizedMemoryUsage = systemInfo.memory_usage ?? systemInfo.memory_percent ?? 0;
+  const normalizedDiskIOReadRate = systemInfo.disk_usage?.io_read_mb_s ?? 0;
+  const normalizedDiskIOWriteRate = systemInfo.disk_usage?.io_write_mb_s ?? 0;
+  const normalizedProcessDiskIOReadRate = normalizedProcessUsage.disk_io_read_mb_s ?? 0;
+  const normalizedProcessDiskIOWriteRate = normalizedProcessUsage.disk_io_write_mb_s ?? 0;
+
   const formatBytes = (bytes) => {
     if (!bytes) return '0 B';
     const k = 1024;
@@ -33,6 +44,37 @@ const Dashboard = ({ cameras, recordings, systemInfo }) => {
 
   const formatDate = (dateString) => {
     return new Date(dateString).toLocaleString();
+  };
+
+  const formatPercent = (value) => {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return '0.0%';
+    return `${numeric.toFixed(1)}%`;
+  };
+
+  const formatMB = (value) => {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return '0.0 MB';
+    return `${numeric.toFixed(1)} MB`;
+  };
+
+  const formatIO = (value) => {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return '0.0 MB';
+    if (numeric >= 1024) {
+      return `${(numeric / 1024).toFixed(2)} GB`;
+    }
+    return `${numeric.toFixed(1)} MB`;
+  };
+
+  const formatRate = (value) => {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return '0.00 MB/s';
+    return `${numeric.toFixed(2)} MB/s`;
+  };
+
+  const currentAvgText = (current, average, formatter) => {
+    return `${formatter(current)} (${formatter(average)})`;
   };
 
   return (
@@ -94,9 +136,79 @@ const Dashboard = ({ cameras, recordings, systemInfo }) => {
 
       <div className="content-section">
         <div className="section-header">
+          <h2 className="section-title">
+            System Metrics <span className="section-title-subtle">(PID: {processPidLabel})</span>
+          </h2>
+        </div>
+
+        <div className="camera-info-grid">
+          <div className="camera-info-card">
+            <div className="camera-info-header">
+              <div className="camera-details">
+                <div className="camera-name">Overall System</div>
+              </div>
+            </div>
+            <div className="camera-metadata">
+              <div className="metadata-item">
+                <span className="metadata-label">CPU Usage:</span>
+                <span className="metadata-value">{currentAvgText(normalizedCpuUsage, normalizedAverages.cpu_usage, formatPercent)}</span>
+              </div>
+              <div className="metadata-item">
+                <span className="metadata-label">RAM Usage:</span>
+                <span className="metadata-value">{currentAvgText(normalizedMemoryUsage, normalizedAverages.memory_usage, formatPercent)}</span>
+              </div>
+              <div className="metadata-item">
+                <span className="metadata-label">Disk IO Read:</span>
+                <span className="metadata-value">{currentAvgText(normalizedDiskIOReadRate, normalizedAverages.disk_io_read_mb_s, formatRate)}</span>
+              </div>
+              <div className="metadata-item">
+                <span className="metadata-label">Disk IO Write:</span>
+                <span className="metadata-value">{currentAvgText(normalizedDiskIOWriteRate, normalizedAverages.disk_io_write_mb_s, formatRate)}</span>
+              </div>
+              <div className="metadata-item">
+                <span className="metadata-label">Disk Size (Overall):</span>
+                <span className="metadata-value">{formatIO(normalizedDiskSize.overall_used_gb * 1024)} / {formatIO(normalizedDiskSize.overall_total_gb * 1024)}</span>
+              </div>
+            </div>
+          </div>
+
+          <div className="camera-info-card">
+            <div className="camera-info-header">
+              <div className="camera-details">
+                <div className="camera-name">start_server Process</div>
+              </div>
+            </div>
+            <div className="camera-metadata">
+              <div className="metadata-item">
+                <span className="metadata-label">CPU Usage:</span>
+                <span className="metadata-value">{currentAvgText(normalizedProcessUsage.cpu_percent, normalizedAverages.process_cpu_percent, formatPercent)}</span>
+              </div>
+              <div className="metadata-item">
+                <span className="metadata-label">RAM Usage:</span>
+                <span className="metadata-value">{currentAvgText(normalizedProcessUsage.memory_percent, normalizedAverages.process_memory_percent, formatPercent)} ({formatMB(normalizedProcessUsage.memory_mb)})</span>
+              </div>
+              <div className="metadata-item">
+                <span className="metadata-label">Disk IO Read:</span>
+                <span className="metadata-value">{currentAvgText(normalizedProcessDiskIOReadRate, normalizedAverages.process_disk_io_read_mb_s, formatRate)}</span>
+              </div>
+              <div className="metadata-item">
+                <span className="metadata-label">Disk IO Write:</span>
+                <span className="metadata-value">{currentAvgText(normalizedProcessDiskIOWriteRate, normalizedAverages.process_disk_io_write_mb_s, formatRate)}</span>
+              </div>
+              <div className="metadata-item">
+                <span className="metadata-label">Disk Size (Recording Dir):</span>
+                <span className="metadata-value">{formatIO((normalizedProcessUsage.recording_dir_size_gb ?? normalizedDiskSize.recording_dir_size_gb) * 1024)}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="content-section">
+        <div className="section-header">
           <h2 className="section-title">Camera Status</h2>
         </div>
-        
+
         <div className="camera-info-grid">
           {cameras.map(camera => (
             <div key={camera.id} className="camera-info-card">
@@ -111,7 +223,7 @@ const Dashboard = ({ cameras, recordings, systemInfo }) => {
                   </span>
                 </div>
               </div>
-              
+
               <div className="camera-metadata">
                 <div className="metadata-item">
                   <span className="metadata-label">Type:</span>

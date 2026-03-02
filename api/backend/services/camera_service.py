@@ -970,24 +970,6 @@ class CameraService(StreamingService):
         
         return status
 
-    def get_system_info(self) -> Dict:
-        """Get system information"""
-        cpu_usage = psutil.cpu_percent(interval=1)
-        memory = psutil.virtual_memory()
-        disk = psutil.disk_usage(self.recordings_dir)
-        
-        uptime = datetime.now() - self.start_time
-        
-        return {
-            'uptime': str(uptime).split('.')[0],
-            'cpu_usage': cpu_usage,
-            'memory_usage': memory.percent,
-            'disk_usage': disk.percent,
-            'active_recordings': len(self.active_recordings),
-            'total_cameras': len(self.get_cameras()),
-            'total_recordings': len(self.get_recordings())
-        }
-
     def get_disk_usage(self) -> float:
         """Return disk usage percent for recordings directory."""
         return psutil.disk_usage(self.recordings_dir).percent

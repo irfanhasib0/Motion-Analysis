@@ -17,6 +17,7 @@ import secrets
 import time
 
 from services.camera_service import CameraService
+from services.dashboard_service import DashboardService
 from models.camera import Camera, CameraCreate, CameraUpdate
 from models.recording import Recording, RecordingCreate
 
@@ -32,6 +33,7 @@ print("Running with config:", configs)
 
 # Initialize services
 camera_service = CameraService(configs=configs)
+dashboard_service = DashboardService(camera_service=camera_service)
     
 AUTH_ENABLED = os.getenv("AUTH_ENABLED", "0").lower() in {"1", "true", "yes", "on"}
 AUTH_PASSWORD = os.getenv("API_PASSWORD", "admin123")
@@ -374,6 +376,15 @@ async def stop_recording(camera_id: str):
 async def get_recordings(camera_id: Optional[str] = None):
     """Get all recordings, optionally filtered by camera"""
     return camera_service.get_recordings(camera_id)
+
+@app.get("/api/system/info")
+async def get_system_info():
+    """Get overall system and start_server process metrics for dashboard."""
+    try:
+        return dashboard_service.get_system_info()
+    except Exception as e:
+        logger.error(f"Failed to get system info: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/recordings/storage")
 async def get_recording_storage():

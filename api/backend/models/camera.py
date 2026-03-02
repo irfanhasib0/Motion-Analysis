@@ -1,7 +1,15 @@
 from pydantic import BaseModel
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Literal
 from datetime import datetime
 from enum import Enum
+
+ResolutionOption = Literal[
+    "320x240",
+    "480x360",
+    "640x480",
+    "1280x720",
+    "1920x1080"
+]
 
 class CameraType(str, Enum):
     RTSP = "rtsp"
@@ -19,7 +27,7 @@ class CameraBase(BaseModel):
     name: str
     camera_type: CameraType
     source: str  # RTSP URL, device index, or IP camera URL
-    resolution: Optional[str] = "1920x1080"
+    resolution: Optional[ResolutionOption] = "640x480"
     fps: Optional[int] = 30
     enabled: bool = True
     description: Optional[str] = None
@@ -32,7 +40,7 @@ class CameraUpdate(CameraBase):
     name: Optional[str] = None
     camera_type: Optional[CameraType] = None
     source: Optional[str] = None
-    resolution: Optional[str] = None
+    resolution: Optional[ResolutionOption] = None
     fps: Optional[int] = None
     enabled: Optional[bool] = None
     description: Optional[str] = None
